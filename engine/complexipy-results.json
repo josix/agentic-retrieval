@@ -1,0 +1,1637 @@
+[
+  {
+    "complexity": 0,
+    "file_name": "bm25.py",
+    "function_name": "BM25Index::__init__",
+    "path": "engine/retrieval/bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "bm25.py",
+    "function_name": "BM25Index::_idf",
+    "path": "engine/retrieval/bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "bm25.py",
+    "function_name": "BM25Index::from_dict",
+    "path": "engine/retrieval/bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "bm25.py",
+    "function_name": "BM25Index::to_dict",
+    "path": "engine/retrieval/bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 7,
+    "file_name": "bm25.py",
+    "function_name": "BM25Index::fit",
+    "path": "engine/retrieval/bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 7,
+    "file_name": "bm25.py",
+    "function_name": "BM25Index::query",
+    "path": "engine/retrieval/bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "chunker.py",
+    "function_name": "_emit_chunk",
+    "path": "engine/retrieval/chunker.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "chunker.py",
+    "function_name": "_extract_heading_text",
+    "path": "engine/retrieval/chunker.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "chunker.py",
+    "function_name": "_is_heading",
+    "path": "engine/retrieval/chunker.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "chunker.py",
+    "function_name": "_detect_title",
+    "path": "engine/retrieval/chunker.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "chunker.py",
+    "function_name": "_accumulate_paragraph",
+    "path": "engine/retrieval/chunker.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 10,
+    "file_name": "chunker.py",
+    "function_name": "chunk_document",
+    "path": "engine/retrieval/chunker.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "cli.py",
+    "function_name": "_build_and_save",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "cli.py",
+    "function_name": "_build_parser",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "cli.py",
+    "function_name": "_print_stats",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "cli.py",
+    "function_name": "_make_retriever",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "cli.py",
+    "function_name": "main",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "cli.py",
+    "function_name": "_resolve_root",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "cli.py",
+    "function_name": "_up_to_date_message",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "cli.py",
+    "function_name": "_load_or_rebuild",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "cli.py",
+    "function_name": "_cmd_index",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "cli.py",
+    "function_name": "_cmd_query",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "cli.py",
+    "function_name": "_cmd_stats",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 12,
+    "file_name": "cli.py",
+    "function_name": "_index_all",
+    "path": "engine/retrieval/cli.py",
+    "refactor_plans": [
+      {
+        "current_complexity": 12,
+        "estimated_complexity_after": 2,
+        "estimated_reduction": 10,
+        "kind": "extract_helper",
+        "line_end": 152,
+        "line_start": 139,
+        "steps": [
+          "move the selected block into a private helper",
+          "pass required values as parameters",
+          "return the result/status needed by the caller"
+        ],
+        "title": "Extract complex block into helper function"
+      },
+      {
+        "current_complexity": 12,
+        "estimated_complexity_after": 7,
+        "estimated_reduction": 5,
+        "kind": "loop_guards",
+        "line_end": 152,
+        "line_start": 139,
+        "steps": [
+          "add negative condition checks at the top of the loop",
+          "use continue for skipped items",
+          "keep the main processing path unindented"
+        ],
+        "title": "Flatten loop body with continue guards"
+      }
+    ]
+  },
+  {
+    "complexity": 0,
+    "file_name": "contextualizer.py",
+    "function_name": "contextualize",
+    "path": "engine/retrieval/contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "contextualizer.py",
+    "function_name": "_first_sentence",
+    "path": "engine/retrieval/contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 10,
+    "file_name": "contextualizer.py",
+    "function_name": "make_context",
+    "path": "engine/retrieval/contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "fusion.py",
+    "function_name": "reciprocal_rank_fusion",
+    "path": "engine/retrieval/fusion.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "index.py",
+    "function_name": "ContextualRetriever::__init__",
+    "path": "engine/retrieval/index.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 5,
+    "file_name": "index.py",
+    "function_name": "ContextualRetriever::search",
+    "path": "engine/retrieval/index.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 9,
+    "file_name": "index.py",
+    "function_name": "ContextualRetriever::build",
+    "path": "engine/retrieval/index.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMContextualizer::__init__",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMContextualizer::_situate",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMContextualizer::generate",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMDocumentContextualizer::__init__",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMDocumentContextualizer::generate",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMContextualizer::_document_text",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMContextualizer::_ensure_client",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "LLMDocumentContextualizer::_ensure_client",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "_new_anthropic_client",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "llm_contextualizer.py",
+    "function_name": "contextualize_llm",
+    "path": "engine/retrieval/llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "persistence.py",
+    "function_name": "_atomic_write_json",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "persistence.py",
+    "function_name": "index_dir",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "persistence.py",
+    "function_name": "is_stale",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "persistence.py",
+    "function_name": "project_key",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "persistence.py",
+    "function_name": "save_index",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "persistence.py",
+    "function_name": "_layout",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "persistence.py",
+    "function_name": "cache_base_dir",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "persistence.py",
+    "function_name": "compute_fingerprint",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "persistence.py",
+    "function_name": "load_index",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 5,
+    "file_name": "persistence.py",
+    "function_name": "cached_retrievers",
+    "path": "engine/retrieval/persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "project_loader.py",
+    "function_name": "_has_allowed_name",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "project_loader.py",
+    "function_name": "_is_excluded_dir",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "project_loader.py",
+    "function_name": "_matches_any_glob",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "project_loader.py",
+    "function_name": "load_chunks",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "project_loader.py",
+    "function_name": "read_text_safe",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "project_loader.py",
+    "function_name": "_is_eligible_file",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "project_loader.py",
+    "function_name": "load_documents",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 9,
+    "file_name": "project_loader.py",
+    "function_name": "discover_files",
+    "path": "engine/retrieval/project_loader.py",
+    "refactor_plans": [
+      {
+        "current_complexity": 9,
+        "estimated_complexity_after": 4,
+        "estimated_reduction": 5,
+        "kind": "extract_helper",
+        "line_end": 204,
+        "line_start": 196,
+        "steps": [
+          "move the selected block into a private helper",
+          "pass required values as parameters",
+          "return the result/status needed by the caller"
+        ],
+        "title": "Extract complex block into helper function"
+      },
+      {
+        "current_complexity": 9,
+        "estimated_complexity_after": 7,
+        "estimated_reduction": 2,
+        "kind": "loop_guards",
+        "line_end": 204,
+        "line_start": 199,
+        "steps": [
+          "add negative condition checks at the top of the loop",
+          "use continue for skipped items",
+          "keep the main processing path unindented"
+        ],
+        "title": "Flatten loop body with continue guards"
+      }
+    ]
+  },
+  {
+    "complexity": 0,
+    "file_name": "providers.py",
+    "function_name": "HeuristicContextualizer::generate",
+    "path": "engine/retrieval/providers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "providers.py",
+    "function_name": "OllamaContextualizer::generate",
+    "path": "engine/retrieval/providers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "providers.py",
+    "function_name": "RemoteLLMContextualizer::generate",
+    "path": "engine/retrieval/providers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "providers.py",
+    "function_name": "SentenceTransformerEmbedder::embed",
+    "path": "engine/retrieval/providers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 5,
+    "file_name": "providers.py",
+    "function_name": "get_contextualizer",
+    "path": "engine/retrieval/providers.py",
+    "refactor_plans": [
+      {
+        "current_complexity": 5,
+        "estimated_complexity_after": 3,
+        "estimated_reduction": 2,
+        "kind": "split_dispatcher",
+        "line_end": 108,
+        "line_start": 96,
+        "steps": [
+          "create one handler per case",
+          "replace the chain with a dispatch table or small delegating match",
+          "keep the orchestration function shallow"
+        ],
+        "title": "Split conditional dispatcher into handlers"
+      }
+    ]
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "ContextualLexicalRetriever::__init__",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "HybridRetriever::index",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "HybridRetriever::to_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "LexicalRetriever::__init__",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "LexicalRetriever::to_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "Retriever::index",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "Retriever::search",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::__init__",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "ContextualLexicalRetriever::_ensure_contextualizer",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "ContextualLexicalRetriever::index",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "HybridRetriever::__init__",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "HybridRetriever::from_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "LexicalRetriever::from_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "PiSeriniRetriever::__init__",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "PiSeriniRetriever::_require_backend",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "PiSeriniRetriever::to_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::_ensure_embedder",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::_require_backends",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::from_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "retrievers.py",
+    "function_name": "build_retriever",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "retrievers.py",
+    "function_name": "LexicalRetriever::index",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "retrievers.py",
+    "function_name": "PiSeriniRetriever::search",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::index",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::search",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "retrievers.py",
+    "function_name": "TurbovecRetriever::to_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "retrievers.py",
+    "function_name": "LexicalRetriever::search",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "retrievers.py",
+    "function_name": "PiSeriniRetriever::from_dict",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "retrievers.py",
+    "function_name": "HybridRetriever::search",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "retrievers.py",
+    "function_name": "PiSeriniRetriever::index",
+    "path": "engine/retrieval/retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "tfidf.py",
+    "function_name": "TfidfIndex::__init__",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "tfidf.py",
+    "function_name": "tokenize",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "tfidf.py",
+    "function_name": "TfidfIndex::from_dict",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "tfidf.py",
+    "function_name": "TfidfIndex::to_dict",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 7,
+    "file_name": "tfidf.py",
+    "function_name": "_doc_weights",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 9,
+    "file_name": "tfidf.py",
+    "function_name": "TfidfIndex::fit",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 12,
+    "file_name": "tfidf.py",
+    "function_name": "TfidfIndex::query",
+    "path": "engine/retrieval/tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::setUp",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_empty_query_returns_list",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_relevant_doc_ranks_first",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_returns_all_docs",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_second_doc_cat_query",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_single_doc_corpus",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_scores_sorted_descending",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_bm25.py",
+    "function_name": "TestBM25Ordering::test_unseen_term_zero_contribution",
+    "path": "engine/tests/test_bm25.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::setUp",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_bad_args_exit_nonzero",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_accepts_all_choice",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_all_skips_missing_backends_without_hard_fail",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_force_rebuilds_even_when_cache_is_fresh",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_hybrid_without_extras_fails_with_guidance",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_returns_zero_and_writes_cache_files",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_without_force_is_a_noop_when_cache_is_fresh",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_without_force_rebuilds_when_corpus_is_stale",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_json_output_parses",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_lexical_cache_does_not_satisfy_hybrid_index",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_missing_required_query_arg_exits_nonzero",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_query_missing_backend_hard_fails_with_guidance",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_query_returns_zero_and_expected_docid",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_query_stale_ok_without_cache_auto_indexes",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_query_without_cache_auto_indexes",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_stale_cache_auto_reindexes_with_new_content",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_stale_ok_returns_stale_results_without_reindexing",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_stats_before_and_after_index",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_stats_reports_retriever_name",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "_bump_mtime",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "_run",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "_run_with_stderr",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_cli.py",
+    "function_name": "_write",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_accepts_every_documented_retriever_choice",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_all_populates_every_slot",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::test_index_default_builds_all_and_core_always_succeeds",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "test_cli.py",
+    "function_name": "TestCli::tearDown",
+    "path": "engine/tests/test_cli.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerContent::test_breadcrumb_format",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerContent::test_contains_chunk_text",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerContent::test_contains_heading",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerContent::test_contains_title",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerContent::test_no_heading_degrades_gracefully",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerContent::test_previous_chunk_sentence_included",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerDeterminism::test_deterministic_with_neighbor",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "TestContextualizerDeterminism::test_same_input_same_output",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_contextualizer.py",
+    "function_name": "_make_chunk",
+    "path": "engine/tests/test_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_llm_contextualizer.py",
+    "function_name": "TestDocumentReconstruction::test_chunks_joined_in_position_order",
+    "path": "engine/tests/test_llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_llm_contextualizer.py",
+    "function_name": "TestPluggableContextualizer::test_build_routes_through_custom_contextualizer",
+    "path": "engine/tests/test_llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_llm_contextualizer.py",
+    "function_name": "TestPluggableContextualizer::test_custom_contextualizer_implies_context",
+    "path": "engine/tests/test_llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_llm_contextualizer.py",
+    "function_name": "_chunk",
+    "path": "engine/tests/test_llm_contextualizer.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::setUp",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::setUpClass",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::tearDownClass",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_cached_retrievers_lists_saved_slots",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_fingerprint_changes_on_content_change",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_fingerprint_changes_on_file_added",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_fingerprint_changes_on_file_removed",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_fingerprint_is_stable_across_calls",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_hybrid_round_trip_search_equality",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_is_stale_false_after_save_true_after_touch",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_lexical_ctx_shares_the_lexical_slot",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_lexical_retriever_from_dict_rejects_unknown_schema",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_load_index_none_for_uncached_retriever_name",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_load_index_none_on_corrupt_json",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_load_index_none_on_missing_cache",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_pi_serini_round_trip_search_equality",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_project_key_differs_per_root",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_retrieval_index_dir_override_honored",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_save_and_load_reject_unknown_retriever_name",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_turbovec_round_trip_search_equality",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "_bump_mtime",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_persistence.py",
+    "function_name": "_write",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_lexical_retriever_round_trip_search_equality",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::tearDown",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_bm25_to_dict_from_dict_fidelity",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "test_persistence.py",
+    "function_name": "TestPersistence::test_tfidf_to_dict_from_dict_fidelity",
+    "path": "engine/tests/test_persistence.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestOfflineAssertion::test_pipeline_runs_without_network_access",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestPipelineContextualizationBenefit::setUpClass",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestPipelineContextualizationBenefit::test_contextual_finds_routing_chunk",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestPipelineContextualizationBenefit::test_contextual_ranks_routing_at_least_as_high_as_raw",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_pipeline.py",
+    "function_name": "_build_all_chunks",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_pipeline.py",
+    "function_name": "_load_corpus",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 3,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestOfflineAssertion::test_no_network_imports_in_retrieval_modules",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 4,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestPipelineContextualizationBenefit::_routing_rank",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 12,
+    "file_name": "test_pipeline.py",
+    "function_name": "TestOfflineAssertion::_get_top_level_imports",
+    "path": "engine/tests/test_pipeline.py",
+    "refactor_plans": [
+      {
+        "current_complexity": 12,
+        "estimated_complexity_after": 4,
+        "estimated_reduction": 8,
+        "kind": "extract_helper",
+        "line_end": 106,
+        "line_start": 100,
+        "steps": [
+          "move the selected block into a private helper",
+          "pass required values as parameters",
+          "return the result/status needed by the caller"
+        ],
+        "title": "Extract complex block into helper function"
+      }
+    ]
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::tearDownClass",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_empty_dir_returns_empty_list",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_excludes_oversize_file",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_includes_expected_files",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_oversize_basename_allowlisted_file_is_excluded",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_read_text_safe_returns_none_for_binary",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_read_text_safe_returns_text_for_normal_file",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "_write",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_project_loader.py",
+    "function_name": "_write_bytes",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::setUpClass",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_docids_are_relative_posix_paths",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_excludes_secret_filenames",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_excludes_vcs_and_dependency_dirs",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_load_chunks_doc_ids_are_relative_paths",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_load_documents_skips_binary",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "test_project_loader.py",
+    "function_name": "TestProjectLoader::test_load_documents_docids_are_relative_paths",
+    "path": "engine/tests/test_project_loader.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestContextualLexicalRetriever::test_enriched_text_is_searchable",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestContextualLexicalRetriever::test_registered_and_selectable",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestHybridRetriever::test_index_raises_runtime_error_when_turbovec_uninstalled",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestHybridRetriever::test_registered_and_selectable",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestLexicalRetriever::test_ranks_relevant_doc_first",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestTurbovecGracefulDegradation::test_raises_runtime_error_when_uninstalled",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestTurbovecGracefulDegradation::test_registry_builds_a_turbovec_retriever_when_installed",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_retrievers.py",
+    "function_name": "_documents",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 2,
+    "file_name": "test_retrievers.py",
+    "function_name": "TestHybridRetriever::test_fuses_lexical_and_dense_rankings",
+    "path": "engine/tests/test_retrievers.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::setUp",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_empty_corpus_returns_empty",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_network_doc_ranks_first_for_routing",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_relevant_doc_ranks_first",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_returns_all_docs",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_single_doc_scores_positive",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTokenize::test_empty_string",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTokenize::test_lowercase",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTokenize::test_numbers_included",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 0,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTokenize::test_strips_punctuation",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_scores_are_non_negative",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  },
+  {
+    "complexity": 1,
+    "file_name": "test_tfidf.py",
+    "function_name": "TestTfidfOrdering::test_scores_sorted_descending",
+    "path": "engine/tests/test_tfidf.py",
+    "refactor_plans": []
+  }
+]

@@ -1,0 +1,85 @@
+site_name: agentic-retrieval
+site_url: https://josix.github.io/agentic-retrieval/
+repo_url: https://github.com/josix/agentic-retrieval
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [engine]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.tabbed:
+      alternate_style: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  nav:
+    omitted_files: warn
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quickstart: getting-started/quickstart.md
+  - How-to guides:
+      - Install the plugin: how-to/install.md
+      - Index and query with the CLI: how-to/index-and-query.md
+      - Use each retriever: how-to/use-each-retriever.md
+      - Hybrid fusion: how-to/hybrid-fusion.md
+      - Enable LLM contextualization: how-to/llm-contextualization.md
+      - Customize indexing: how-to/customize-indexing.md
+      - Integrate coding agents: how-to/integrate-coding-agents.md
+      - Build and release: how-to/build-and-release.md
+  - Concepts:
+      - Retrieval strategies compared: concepts/retrieval-strategies.md
+      - Contextual retrieval: concepts/contextual-retrieval.md
+      - Cost model: concepts/cost-model.md
+      - Architecture: concepts/architecture.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Persistence and cache: reference/persistence-and-cache.md
+      - Environment variables: reference/environment-variables.md
+      - Engine API overview: reference/engine-api.md
+      - Troubleshooting: reference/troubleshooting.md
+      - API:
+          - retrievers: reference/api/retrievers.md
+          - document: reference/api/document.md
+          - project_loader: reference/api/project_loader.md
+          - fusion: reference/api/fusion.md
+          - contextualizers: reference/api/contextualizers.md
+  - Changelog: changelog.md

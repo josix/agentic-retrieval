@@ -1,0 +1,13 @@
+Photosynthesis
+
+Overview:
+Photosynthesis converts light energy into chemical energy stored in glucose. Plants, algae, and some bacteria perform this process using pigments that absorb specific wavelengths. The overall reaction consumes carbon dioxide and water while releasing oxygen.
+
+Light Reactions:
+Chlorophyll absorbs photons primarily in the red and blue regions. Excited electrons flow through a chain of proteins embedded in the thylakoid membrane. This electron transport generates ATP and NADPH while splitting water molecules and releasing oxygen gas.
+
+Calvin Cycle:
+The carbon fixation stage uses ATP and NADPH to convert carbon dioxide into three-carbon sugars. Rubisco is the enzyme responsible for attaching carbon dioxide to an acceptor molecule. Multiple turns of the cycle are needed to produce one glucose molecule.
+
+Factors Affecting Rate:
+Light intensity, carbon dioxide concentration, and temperature all influence photosynthesis speed. At low light levels, the rate is limited by photon availability. At high temperatures, enzyme activity decreases and the reaction slows. Water availability also plays a critical role in sustaining the process.

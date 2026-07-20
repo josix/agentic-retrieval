@@ -1,0 +1,23 @@
+{
+  "name": "agentic-retrieval-marketplace",
+  "owner": {
+    "name": "josix"
+  },
+  "plugins": [
+    {
+      "name": "agentic-retrieval",
+      "source": {
+        "source": "github",
+        "repo": "josix/agentic-retrieval"
+      },
+      "description": "Five retrieval strategies compared offline-first: contextual lexical retrieval (TF-IDF/BM25/RRF fusion), its LLM-enriched lexical+ctx variant, turbovec (dense ANN), pi-serini (Lucene BM25 via Pyserini), and hybrid (lexical + dense fused with RRF)",
+      "version": "0.2.0",
+      "author": {
+        "name": "Wilson Josix Wang"
+      },
+      "license": "MIT",
+      "keywords": ["retrieval", "rag", "bm25", "dense-ann", "contextual-retrieval"],
+      "category": "development"
+    }
+  ]
+}

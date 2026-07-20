@@ -1,0 +1,13 @@
+Solar System
+
+Overview:
+The solar system consists of the Sun and all objects gravitationally bound to it. Eight planets orbit the Sun at different distances, along with moons, asteroids, and comets. Gravitational forces dominate all large-scale interactions.
+
+Inner Planets:
+Mercury, Venus, Earth, and Mars are rocky bodies close to the Sun. Their surfaces have been shaped by impacts, volcanism, and in Earth's case, plate tectonics. Energy from the Sun drives atmospheric and surface processes on each of these worlds.
+
+Outer Planets:
+Jupiter, Saturn, Uranus, and Neptune are gas and ice giants. They contain the bulk of planetary mass in the solar system. Jupiter's magnetic field extends far beyond the planet, trapping charged particles and creating radiation belts.
+
+Asteroid Belt:
+Between Mars and Jupiter lies a region populated by rocky and metallic bodies. These objects failed to coalesce into a planet due to Jupiter's gravitational influence. Data from probes show diverse compositions that carry information about the early solar system.

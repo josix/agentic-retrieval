@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wheel + sdist
+        working-directory: engine
+        run: uv build
+
+      - name: Upload build artifacts to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            engine/dist/*.whl
+            engine/dist/*.tar.gz
+
+  # PyPI publishing via trusted publishing. Disabled until the package is
+  # ready to be published to PyPI — flip `if: false` to `if: true` (and
+  # configure a trusted publisher for this repo on pypi.org) to enable.
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: false
+    environment:
+      name: pypi
+      url: https://pypi.org/p/rag-retrieval
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wheel + sdist
+        working-directory: engine
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: engine/dist

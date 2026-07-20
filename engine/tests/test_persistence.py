@@ -1,0 +1,311 @@
+"""Tests for retrieval.persistence.
+
+Covers: to_dict/from_dict fidelity (BM25Index, TfidfIndex, LexicalRetriever)
+including round-trip search equality; fingerprint stability and sensitivity
+to content/add/remove changes; is_stale before/after a file touch;
+load_index's None-on-missing/corrupt behavior; project_key uniqueness per
+root; and the RETRIEVAL_INDEX_DIR env override.
+"""
+
+import json
+import os
+import pathlib
+import sys
+import tempfile
+import unittest
+
+_ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+from retrieval.bm25 import BM25Index  # noqa: E402
+from retrieval.persistence import (  # noqa: E402
+    cache_base_dir,
+    cached_retrievers,
+    compute_fingerprint,
+    index_dir,
+    is_stale,
+    load_index,
+    project_key,
+    save_index,
+)
+from retrieval.project_loader import load_documents  # noqa: E402
+from retrieval.retrievers import HybridRetriever, LexicalRetriever, TurbovecRetriever  # noqa: E402
+from retrieval.tfidf import TfidfIndex  # noqa: E402
+
+try:
+    import turbovec  # noqa: F401
+
+    _TURBOVEC_INSTALLED = True
+except ImportError:
+    _TURBOVEC_INSTALLED = False
+
+try:
+    import pyserini  # noqa: F401
+
+    _PYSERINI_INSTALLED = True
+except ImportError:
+    _PYSERINI_INSTALLED = False
+
+
+def _write(path: pathlib.Path, content: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _bump_mtime(path: pathlib.Path) -> None:
+    """Advance *path*'s mtime by 1s (in ns) so a fingerprint change is guaranteed
+    regardless of filesystem mtime resolution."""
+    new_ns = path.stat().st_mtime_ns + 1_000_000_000
+    os.utime(path, ns=(new_ns, new_ns))
+
+
+class TestPersistence(unittest.TestCase):
+    """Shared read-only project fixture; RETRIEVAL_INDEX_DIR is redirected per test."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.root = pathlib.Path(cls.tmpdir.name) / "project"
+        _write(cls.root / "a.txt", "routers forward packets between networks and carry data")
+        _write(cls.root / "b.txt", "photosynthesis converts sunlight into chemical energy")
+        _write(cls.root / "sub" / "c.md", "the asteroid belt lies between mars and jupiter")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmpdir.cleanup()
+
+    def setUp(self) -> None:
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+
+    # -- to_dict/from_dict fidelity ---------------------------------------
+
+    def test_tfidf_to_dict_from_dict_fidelity(self) -> None:
+        docs = [d.text for d in load_documents(self.root)]
+        index = TfidfIndex()
+        index.fit(docs)
+        data = index.to_dict()
+        json.dumps(data)  # must be JSON-safe
+        restored = TfidfIndex.from_dict(data)
+        for query in ("routers packets", "photosynthesis energy", "asteroid belt"):
+            self.assertEqual(index.query(query), restored.query(query))
+
+    def test_bm25_to_dict_from_dict_fidelity(self) -> None:
+        docs = [d.text for d in load_documents(self.root)]
+        index = BM25Index(k1=1.3, b=0.8)
+        index.fit(docs)
+        data = index.to_dict()
+        json.dumps(data)  # must be JSON-safe
+        restored = BM25Index.from_dict(data)
+        self.assertEqual(restored.k1, 1.3)
+        self.assertEqual(restored.b, 0.8)
+        for query in ("routers packets", "photosynthesis energy", "asteroid belt"):
+            self.assertEqual(index.query(query), restored.query(query))
+
+    def test_lexical_retriever_round_trip_search_equality(self) -> None:
+        docs = load_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(docs)
+        data = retriever.to_dict()
+        json.dumps(data)  # must be JSON-safe
+        restored = LexicalRetriever.from_dict(data)
+        for query in (
+            "what carries data between networks",
+            "how do plants convert light into energy",
+            "asteroid belt mars jupiter",
+            "no shared vocabulary whatsoever xyzzy",
+        ):
+            self.assertEqual(retriever.search(query, top_k=3), restored.search(query, top_k=3))
+
+    def test_lexical_retriever_from_dict_rejects_unknown_schema(self) -> None:
+        docs = load_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(docs)
+        data = retriever.to_dict()
+        data["schema"] = 999
+        with self.assertRaises(ValueError):
+            LexicalRetriever.from_dict(data)
+
+    # -- fingerprint --------------------------------------------------------
+
+    def test_fingerprint_is_stable_across_calls(self) -> None:
+        self.assertEqual(compute_fingerprint(self.root), compute_fingerprint(self.root))
+
+    def test_fingerprint_changes_on_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            path = root / "x.txt"
+            _write(path, "hello")
+            fp1 = compute_fingerprint(root)
+            _write(path, "hello world, much longer now")
+            _bump_mtime(path)
+            fp2 = compute_fingerprint(root)
+            self.assertNotEqual(fp1, fp2)
+
+    def test_fingerprint_changes_on_file_added(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello")
+            fp1 = compute_fingerprint(root)
+            _write(root / "y.txt", "world")
+            fp2 = compute_fingerprint(root)
+            self.assertNotEqual(fp1, fp2)
+
+    def test_fingerprint_changes_on_file_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello")
+            _write(root / "y.txt", "world")
+            fp1 = compute_fingerprint(root)
+            (root / "y.txt").unlink()
+            fp2 = compute_fingerprint(root)
+            self.assertNotEqual(fp1, fp2)
+
+    # -- is_stale -------------------------------------------------------------
+
+    def test_is_stale_false_after_save_true_after_touch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            path = root / "x.txt"
+            _write(path, "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.2.0")
+
+            loaded = load_index(root)
+            self.assertIsNotNone(loaded)
+            _retriever, meta = loaded
+            self.assertFalse(is_stale(root, meta))
+
+            _bump_mtime(path)
+            self.assertTrue(is_stale(root, meta))
+
+    # -- load_index -----------------------------------------------------------
+
+    def test_load_index_none_on_missing_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "never-indexed"
+            root.mkdir()
+            self.assertIsNone(load_index(root))
+
+    def test_load_index_none_on_corrupt_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.2.0")
+
+            directory = index_dir(root)
+            (directory / "lexical.json").write_text("{not valid json", encoding="utf-8")
+            self.assertIsNone(load_index(root))
+
+    # -- per-retriever cache slots ---------------------------------------------
+
+    def test_load_index_none_for_uncached_retriever_name(self) -> None:
+        retriever = LexicalRetriever()
+        retriever.index(load_documents(self.root))
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.2.0")
+        # A lexical cache must not satisfy a request for a different retriever.
+        self.assertIsNone(load_index(self.root, "turbovec"))
+        self.assertIsNone(load_index(self.root, "hybrid"))
+        self.assertIsNone(load_index(self.root, "pi-serini"))
+
+    def test_save_and_load_reject_unknown_retriever_name(self) -> None:
+        retriever = LexicalRetriever()
+        retriever.index(load_documents(self.root))
+        with self.assertRaises(ValueError):
+            save_index(retriever, self.root, "fp", "not-a-retriever", "0.2.0")
+        with self.assertRaises(ValueError):
+            load_index(self.root, "not-a-retriever")
+
+    def test_cached_retrievers_lists_saved_slots(self) -> None:
+        self.assertEqual(cached_retrievers(self.root), {})
+        retriever = LexicalRetriever()
+        retriever.index(load_documents(self.root))
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.2.0")
+        cached = cached_retrievers(self.root)
+        self.assertEqual(list(cached), ["lexical"])
+        self.assertEqual(cached["lexical"]["doc_count"], 3)
+
+    def test_lexical_ctx_shares_the_lexical_slot(self) -> None:
+        retriever = LexicalRetriever()
+        retriever.index(load_documents(self.root))
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical+ctx", "0.2.0")
+        # Same files as lexical, so the slot reports the ctx name and a
+        # plain lexical load still round-trips it.
+        self.assertEqual(list(cached_retrievers(self.root)), ["lexical+ctx"])
+        self.assertIsNotNone(load_index(self.root, "lexical"))
+
+    @unittest.skipUnless(_TURBOVEC_INSTALLED, "turbovec not installed")
+    def test_turbovec_round_trip_search_equality(self) -> None:
+        docs = load_documents(self.root)
+        retriever = TurbovecRetriever()
+        retriever.index(docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "turbovec", "0.2.0")
+        loaded = load_index(self.root, "turbovec")
+        self.assertIsNotNone(loaded)
+        restored, _meta = loaded
+        query = "what carries data between networks"
+        self.assertEqual(retriever.search(query, top_k=3), restored.search(query, top_k=3))
+
+    @unittest.skipUnless(_TURBOVEC_INSTALLED, "turbovec not installed")
+    def test_hybrid_round_trip_search_equality(self) -> None:
+        docs = load_documents(self.root)
+        retriever = HybridRetriever()
+        retriever.index(docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "hybrid", "0.2.0")
+        loaded = load_index(self.root, "hybrid")
+        self.assertIsNotNone(loaded)
+        restored, _meta = loaded
+        query = "what carries data between networks"
+        self.assertEqual(retriever.search(query, top_k=3), restored.search(query, top_k=3))
+
+    @unittest.skipUnless(_PYSERINI_INSTALLED, "pyserini not installed")
+    def test_pi_serini_round_trip_search_equality(self) -> None:
+        from retrieval.retrievers import PiSeriniRetriever
+
+        docs = load_documents(self.root)
+        retriever = PiSeriniRetriever(index_path=index_dir(self.root) / "lucene")
+        retriever.index(docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "pi-serini", "0.2.0")
+        loaded = load_index(self.root, "pi-serini")
+        self.assertIsNotNone(loaded)
+        restored, _meta = loaded
+        query = "what carries data between networks"
+        self.assertEqual(retriever.search(query, top_k=3), restored.search(query, top_k=3))
+
+    # -- project_key / cache_base_dir ------------------------------------------
+
+    def test_project_key_differs_per_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root_a = pathlib.Path(tmp) / "a"
+            root_b = pathlib.Path(tmp) / "b"
+            root_a.mkdir()
+            root_b.mkdir()
+            self.assertNotEqual(project_key(root_a), project_key(root_b))
+
+    def test_retrieval_index_dir_override_honored(self) -> None:
+        with tempfile.TemporaryDirectory() as override_dir:
+            os.environ["RETRIEVAL_INDEX_DIR"] = override_dir
+            self.assertEqual(cache_base_dir(), pathlib.Path(override_dir))
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                _write(root / "x.txt", "hello")
+                directory = index_dir(root)
+                self.assertTrue(str(directory).startswith(override_dir))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,13 @@
+Computer Networks
+
+Overview:
+Computer networks connect devices to share resources and exchange data. The fundamental goal is reliable communication between endpoints regardless of physical distance or topology. Modern networks use layered protocols to separate concerns.
+
+Routing:
+It forwards packets between segments. Each hop examines the destination field and consults a table to decide the outgoing path. When multiple paths exist, metrics like hop count or bandwidth determine the preferred route. Without this mechanism, isolated segments would have no way to reach each other.
+
+Switching:
+Switches operate at layer two and use MAC address tables to direct frames within a single broadcast domain. Unlike forwarding decisions based on logical addressing, switching relies on hardware identifiers. Collisions are eliminated by creating per-port collision domains.
+
+Transport Layer:
+TCP provides reliable, ordered delivery by using sequence numbers and acknowledgments. UDP offers lower latency at the cost of reliability, suitable for real-time applications. Flow control prevents fast senders from overwhelming slow receivers.
