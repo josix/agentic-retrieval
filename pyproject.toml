@@ -1,0 +1,13 @@
+# Root project for documentation tooling only.
+# The Python engine lives in engine/ with its own pyproject.toml; this file
+# exists so CI (deploy-docs.yml) can `uv sync --no-install-project` and
+# `uv run --no-project mkdocs build --strict` from the repo root.
+[project]
+name = "agentic-retrieval-docs"
+version = "0.1.0"
+description = "Documentation build environment for agentic-retrieval"
+requires-python = ">=3.12"
+dependencies = [
+    "mkdocs-material",
+    "mkdocstrings[python]",
+]
