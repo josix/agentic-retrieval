@@ -28,7 +28,7 @@ uv run --project engine --extra all retrieval query "..." --root <path-to-projec
 # -> src/app.py:42-58
 ```
 
-Read exactly that span — no re-grepping the file to find the right lines:
+The span locates the lines for you — open it directly instead of re-grepping the file, then read outward from there to follow references and confirm the answer:
 
 ```
 Read(path="src/app.py", offset=42, limit=58 - 42 + 1)

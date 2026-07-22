@@ -58,6 +58,7 @@ class TestProjectLoader(unittest.TestCase):
         _write(cls.root / ".venv" / "lib" / "y.py", "# vendored\n")
         _write_bytes(cls.root / "__pycache__" / "z.pyc", b"\x00\x01\x02cachedbytes")
         _write(cls.root / ".complexipy_cache" / "README.md", "# cache artifact\n")
+        _write(cls.root / "site" / "index.html", "<html>generated site output</html>")
 
         # --- secret-like filenames (allowed extension/name pattern, denied by glob) ---
         _write(cls.root / ".env", "SECRET_KEY=abc123")
@@ -95,6 +96,7 @@ class TestProjectLoader(unittest.TestCase):
             ".venv/lib/y.py",
             "__pycache__/z.pyc",
             ".complexipy_cache/README.md",
+            "site/index.html",
         ):
             self.assertNotIn(bad, self.relative)
 

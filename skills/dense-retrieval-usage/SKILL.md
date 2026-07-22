@@ -75,22 +75,32 @@ UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval
 PROJECT_ROOT="$PROJECT_ROOT" uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all python - <<'PY'
 import os
 
-from retrieval.project_loader import load_documents
+from retrieval.project_loader import load_chunk_documents
 from retrieval.retrievers import TurbovecRetriever
 
-docs = load_documents(os.environ["PROJECT_ROOT"])
+docs = load_chunk_documents(os.environ["PROJECT_ROOT"])
 
 r = TurbovecRetriever()  # default: model_name="sentence-transformers/all-MiniLM-L6-v2", bit_width=4
 r.index(docs)
-print(r.search("what carries data between networks", top_k=5))
+for hit in r.search_detailed("what carries data between networks", top_k=5):
+    print(f"{hit.source_path}:{hit.start_line}-{hit.end_line}")
 PY
 ```
 
-`load_documents` skips VCS/dependency/build directories and secret-looking
-filenames by default — see `lexical-retrieval-usage` for the full exclusion
-list and a minimal inline-`Document` example, and
+`load_chunk_documents` chunks every discovered file and returns one
+chunk-granularity `Document` per span (`docid = "{path}:{start}-{end}"`),
+skipping VCS/dependency/build directories and secret-looking filenames by
+default — see `lexical-retrieval-usage` for the full exclusion list and a
+minimal inline-`Document` example, and
 `lexical-retrieval-usage/references/file-discovery.md` for overriding
 `extensions`/`exclude_dirs`/`exclude_globs`/`include_basenames`/`max_bytes`.
+Each `search_detailed` result's span comes from that Document metadata, so a
+hit turns straight into `Read(hit.source_path, offset=hit.start_line,
+limit=hit.end_line - hit.start_line + 1)`. Treat that span as a seed to read
+and explore from, not the final answer — follow the references it surfaces
+outward and re-query with the vocabulary a hit reveals; if the top spans
+look noisy, re-query, switch retriever, or raise `--top-k` (see the
+`retrieval` skill's Step 3).
 
 `TurbovecRetriever.__init__(model_name: str = "sentence-transformers/all-MiniLM-L6-v2", bit_width: int = 4)`
 takes both as explicit constructor args — swap in a larger embedder (any

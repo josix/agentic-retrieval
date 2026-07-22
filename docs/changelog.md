@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **`site/` excluded from indexing by default.** `site` (MkDocs/static-site
+  build output) joined `DEFAULT_EXCLUDE_DIRS` in `retrieval.project_loader`,
+  so generated site assets no longer pollute the index. On-disk caches built
+  before this change will read as stale on the next `query` (the content
+  fingerprint now differs) and auto-rebuild — no manual cache-clearing.
+  Override with the `exclude_dirs=` keyword if your project keeps real source
+  under `site/`.
+- **Skill guidance: post-retrieval enrichment loop.** The `retrieval` skill
+  gained a Step 3 framing retrieved spans as exploration seeds (read the span,
+  follow references outward, re-query with the vocabulary a hit reveals, stop
+  when the question is answered) plus a noisy/low-relevance recovery
+  subsection. The four `*-retrieval-usage` skills and the integrate-coding-
+  agents how-to mirror the same "seed, not final answer" framing; the earlier
+  "no manual grepping needed" / "no re-grepping" stop-signal phrasing was
+  removed.
 - **Chunk-level indexing with file:line spans.** All five production
   retrievers now index chunk-granularity `Document`s
   (`retrieval.project_loader.load_chunk_documents`) instead of whole

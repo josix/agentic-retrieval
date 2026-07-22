@@ -87,6 +87,7 @@ DEFAULT_EXCLUDE_DIRS = frozenset(
         ".ruff_cache",
         ".tox",
         "target",
+        "site",
         ".next",
         ".cache",
         "site-packages",

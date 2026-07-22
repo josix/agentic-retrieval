@@ -79,10 +79,10 @@ PROJECT_ROOT="$PROJECT_ROOT" uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --e
 import os
 
 from retrieval.fusion import reciprocal_rank_fusion
-from retrieval.project_loader import load_documents
+from retrieval.project_loader import load_chunk_documents
 from retrieval.retrievers import LexicalRetriever, TurbovecRetriever
 
-docs = load_documents(os.environ["PROJECT_ROOT"])
+docs = load_chunk_documents(os.environ["PROJECT_ROOT"])
 query = "what carries data between networks"
 
 lexical = LexicalRetriever()
@@ -112,10 +112,20 @@ print([from_idx[idx] for idx, _score in fused])
 PY
 ```
 
-`load_documents` (and `discover_files`/`load_chunks`) skip VCS/dependency/
-build directories and secret-looking filenames by default, and accept
-`extensions`/`exclude_dirs`/`exclude_globs`/`include_basenames`/`max_bytes`
-overrides — see `lexical-retrieval-usage/references/file-discovery.md`.
+`load_chunk_documents` (and `discover_files`/`load_documents`/`load_chunks`)
+skip VCS/dependency/build directories and secret-looking filenames by
+default, and accept `extensions`/`exclude_dirs`/`exclude_globs`/
+`include_basenames`/`max_bytes` overrides — see
+`lexical-retrieval-usage/references/file-discovery.md`. Each docid printed
+above is a chunk span (`"{path}:{start}-{end}"`); prefer
+`retriever.search_detailed(...)` over the manual fusion recipe above when you
+just need `SearchHit`s (with `source_path`/`start_line`/`end_line` already
+resolved) instead of raw docids — `HybridRetriever`/`build_retriever("hybrid")`
+does exactly this fusion internally. Treat a resolved span as a seed to read
+and explore from, not the final answer — follow the references it surfaces
+outward and re-query with the vocabulary a hit reveals; if the top spans
+look noisy, re-query, switch retriever, or raise `--top-k` (see the
+`retrieval` skill's Step 3).
 
 ## Provider selection (experimental)
 
