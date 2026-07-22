@@ -25,10 +25,22 @@ except ImportError:
 
 def _documents():
     return [
-        Document("d1", "Routers forward packets between networks and carry data."),
-        Document("d2", "Photosynthesis converts sunlight into chemical energy in plants."),
-        Document("d3", "The asteroid belt lies between Mars and Jupiter."),
-        Document("d4", "Switches direct frames within a local area network domain."),
+        Document(
+            "d1", "Routers forward packets between networks and carry data.",
+            source_path="net.txt", start_line=1, end_line=1,
+        ),
+        Document(
+            "d2", "Photosynthesis converts sunlight into chemical energy in plants.",
+            source_path="bio.txt", start_line=2, end_line=2,
+        ),
+        Document(
+            "d3", "The asteroid belt lies between Mars and Jupiter.",
+            source_path="astro.txt", start_line=3, end_line=4,
+        ),
+        Document(
+            "d4", "Switches direct frames within a local area network domain.",
+            source_path="net.txt", start_line=5, end_line=5,
+        ),
     ]
 
 
@@ -39,6 +51,27 @@ class TestLexicalRetriever(unittest.TestCase):
         r.index(documents)
         self.assertEqual(r.search("what carries data between networks", top_k=1)[0], "d1")
         self.assertEqual(r.search("how do plants convert light into energy", top_k=1)[0], "d2")
+
+    def test_search_detailed_returns_populated_spans(self) -> None:
+        documents = _documents()
+        r = LexicalRetriever()
+        r.index(documents)
+        hits = r.search_detailed("what carries data between networks", top_k=1)
+        self.assertEqual(len(hits), 1)
+        hit = hits[0]
+        self.assertEqual(hit.docid, "d1")
+        self.assertEqual(hit.source_path, "net.txt")
+        self.assertEqual(hit.start_line, 1)
+        self.assertEqual(hit.end_line, 1)
+        self.assertEqual(hit.rank, 0)
+
+    def test_search_is_consistent_with_search_detailed(self) -> None:
+        documents = _documents()
+        r = LexicalRetriever()
+        r.index(documents)
+        hits = r.search_detailed("asteroid belt mars jupiter", top_k=4)
+        docids = r.search("asteroid belt mars jupiter", top_k=4)
+        self.assertEqual([h.docid for h in hits], docids)
 
 
 class TestContextualLexicalRetriever(unittest.TestCase):
@@ -65,6 +98,18 @@ class TestContextualLexicalRetriever(unittest.TestCase):
         self.assertEqual(len(r.search("ZQXENRICH", top_k=4)), 4)
         # Real query routing still works on the original text.
         self.assertEqual(r.search("what carries data between networks", top_k=1)[0], "d1")
+
+    def test_enrichment_does_not_alter_span_metadata(self) -> None:
+        """Enrichment only prepends context to `text`; span fields (and
+        docid, source_path) must round-trip through index() unchanged."""
+        documents = _documents()
+        r = ContextualLexicalRetriever(contextualizer=lambda text: "CTX")
+        r.index(documents)
+        hit = r.search_detailed("what carries data between networks", top_k=1)[0]
+        self.assertEqual(hit.docid, "d1")
+        self.assertEqual(hit.source_path, "net.txt")
+        self.assertEqual(hit.start_line, 1)
+        self.assertEqual(hit.end_line, 1)
 
 
 class TestTurbovecGracefulDegradation(unittest.TestCase):
@@ -127,6 +172,32 @@ class TestHybridRetriever(unittest.TestCase):
         # stub's d3 must also surface even though lexical ranks it low.
         self.assertEqual(results[0], "d1")
         self.assertIn("d3", results[:2])
+
+    def test_search_detailed_fuses_by_chunk_docid_with_spans(self) -> None:
+        documents = _documents()
+
+        class StubDense:
+            def index(self, docs) -> None:
+                self.indexed = [d.docid for d in docs]
+
+            def search(self, query: str, top_k: int):
+                return ["d3", "d1"][:top_k]
+
+        stub = StubDense()
+        r = HybridRetriever(dense=stub)
+        r.index(documents)
+
+        hits = r.search_detailed("what carries data between networks", top_k=4)
+        self.assertEqual(hits[0].docid, "d1")
+        self.assertEqual(hits[0].source_path, "net.txt")
+        self.assertEqual(hits[0].start_line, 1)
+        self.assertEqual(hits[0].end_line, 1)
+        self.assertEqual(hits[0].rank, 0)
+        # search() must be the plain-docid projection of search_detailed().
+        self.assertEqual(
+            [h.docid for h in hits],
+            r.search("what carries data between networks", top_k=4),
+        )
 
 
 if __name__ == "__main__":

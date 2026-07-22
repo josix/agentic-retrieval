@@ -20,6 +20,24 @@ uv run --project engine --extra all retrieval query "..." --root <path-to-projec
 missing or the project's files changed since it was built. `retrieval stats
 --root <path-to-project>` reports on the cache without searching.
 
+`query`'s plain output is one `path:start_line-end_line` span per line
+(best match first) — feed that straight to your agent's file-read tool:
+
+```bash
+uv run --project engine --extra all retrieval query "..." --root <path-to-project> --top-k 1
+# -> src/app.py:42-58
+```
+
+Read exactly that span — no re-grepping the file to find the right lines:
+
+```
+Read(path="src/app.py", offset=42, limit=58 - 42 + 1)
+```
+
+`--json` emits `{"query": ..., "results": [{"docid", "path", "start_line",
+"end_line", "rank"}, ...]}` for programmatic consumption (see
+[CLI reference](../reference/cli.md#query)).
+
 !!! warning
     Don't point `RETRIEVAL_INDEX_DIR` inside the project root being
     indexed — the cache's `lexical.json`/`meta.json` would get indexed as
@@ -36,14 +54,14 @@ uv sync --project engine --extra all
 RETRIEVAL_ROOT=<path-to-project> uv run --project engine --extra all python - <<'PY'
 import os
 
-from retrieval.project_loader import load_documents
+from retrieval.project_loader import load_chunk_documents
 from retrieval.retrievers import LexicalRetriever
 
-docs = load_documents(os.environ["RETRIEVAL_ROOT"])
+docs = load_chunk_documents(os.environ["RETRIEVAL_ROOT"])
 r = LexicalRetriever()
 r.index(docs)
-for docid in r.search("...", top_k=5):
-    print(docid)
+for hit in r.search_detailed("...", top_k=5):
+    print(f"{hit.source_path}:{hit.start_line}-{hit.end_line}")
 PY
 ```
 

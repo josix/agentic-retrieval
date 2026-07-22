@@ -21,6 +21,8 @@ def _chunk(doc_id: str, text: str, position: int, heading: str = "H") -> Chunk:
         heading=heading,
         text=text,
         position=position,
+        start_line=1,
+        end_line=1,
     )
 
 

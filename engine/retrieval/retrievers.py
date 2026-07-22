@@ -2,9 +2,21 @@
 
 Every retriever implements the same tiny contract:
 
-    name                    -> str            human label for the results table
-    index(documents)        -> None           build over a list of Document
-    search(query, top_k)    -> List[str]      ranked docids, best first
+    name                            -> str             human label for the results table
+    index(documents)                -> None             build over a list of Document
+    search(query, top_k)            -> List[str]        ranked docids, best first
+    search_detailed(query, top_k)   -> List[SearchHit]   ranked hits with file:line spans
+
+``documents`` are expected to be chunk-granularity (see
+``retrieval.project_loader.load_chunk_documents``): each carries a
+``docid`` of the form ``"{path}:{start}-{end}"`` plus the same span as
+structured ``source_path``/``start_line``/``end_line`` fields. Every
+retriever tracks a parallel ``self._units`` list (``{docid, source_path,
+start_line, end_line}``) built straight from the indexed Documents'
+metadata — never by parsing spans back out of a docid string — and
+``search_detailed`` maps each ranked positional index into its unit to
+build a ``SearchHit``. ``search()`` is a thin wrapper: ``[h.docid for h in
+search_detailed(...)]``, kept for backward-compatible callers.
 
 Four backends:
 
@@ -28,9 +40,38 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from retrieval.bm25 import BM25Index
-from retrieval.document import Document
+from retrieval.document import Document, SearchHit
 from retrieval.fusion import reciprocal_rank_fusion
 from retrieval.tfidf import TfidfIndex
+
+
+def _units_from_documents(documents: List[Document]) -> List[Dict[str, Any]]:
+    """Build the ``{docid, source_path, start_line, end_line}`` unit list a
+    retriever tracks alongside its index, straight from each Document's span
+    metadata (never parsed back out of the docid string)."""
+    return [
+        {
+            "docid": d.docid,
+            "source_path": d.source_path,
+            "start_line": d.start_line,
+            "end_line": d.end_line,
+        }
+        for d in documents
+    ]
+
+
+def _hits_from_units(units: List[Dict[str, Any]], ranked_idx: List[int]) -> List[SearchHit]:
+    """Map ranked positional indices into *units* to build ``SearchHit``s."""
+    return [
+        SearchHit(
+            docid=units[idx]["docid"],
+            source_path=units[idx]["source_path"],
+            start_line=units[idx]["start_line"],
+            end_line=units[idx]["end_line"],
+            rank=rank,
+        )
+        for rank, idx in enumerate(ranked_idx)
+    ]
 
 
 @runtime_checkable
@@ -40,6 +81,8 @@ class Retriever(Protocol):
     def index(self, documents: List[Document]) -> None: ...
 
     def search(self, query: str, top_k: int) -> List[str]: ...
+
+    def search_detailed(self, query: str, top_k: int) -> List[SearchHit]: ...
 
 
 class LexicalRetriever:
@@ -53,31 +96,38 @@ class LexicalRetriever:
 
     #: Bump when the persisted dict shape changes incompatibly; ``from_dict``
     #: rejects any other value so a stale on-disk cache is rebuilt rather than
-    #: mis-parsed.
-    SCHEMA_VERSION = 1
+    #: mis-parsed. v2 adds ``units`` (chunk span metadata).
+    SCHEMA_VERSION = 2
 
     def __init__(self) -> None:
         self._docids: List[str] = []
+        self._units: List[Dict[str, Any]] = []
         self._tfidf = TfidfIndex()
         self._bm25 = BM25Index()
 
     def index(self, documents: List[Document]) -> None:
-        self._docids = [d.docid for d in documents]
+        self._units = _units_from_documents(documents)
+        self._docids = [u["docid"] for u in self._units]
         texts = [d.text for d in documents]
         self._tfidf.fit(texts)
         self._bm25.fit(texts)
 
-    def search(self, query: str, top_k: int) -> List[str]:
+    def search_detailed(self, query: str, top_k: int) -> List[SearchHit]:
         tfidf_rank = [idx for idx, _ in self._tfidf.query(query)]
         bm25_rank = [idx for idx, _ in self._bm25.query(query)]
         fused = reciprocal_rank_fusion([tfidf_rank, bm25_rank])
-        return [self._docids[idx] for idx, _ in fused[:top_k]]
+        ranked_idx = [idx for idx, _ in fused[:top_k]]
+        return _hits_from_units(self._units, ranked_idx)
+
+    def search(self, query: str, top_k: int) -> List[str]:
+        return [h.docid for h in self.search_detailed(query, top_k)]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a JSON-safe dict for on-disk persistence."""
         return {
             "schema": self.SCHEMA_VERSION,
             "docids": self._docids,
+            "units": self._units,
             "tfidf": self._tfidf.to_dict(),
             "bm25": self._bm25.to_dict(),
         }
@@ -95,6 +145,7 @@ class LexicalRetriever:
             raise ValueError(f"unsupported LexicalRetriever schema {schema!r}")
         retriever = cls()
         retriever._docids = data["docids"]
+        retriever._units = data["units"]
         retriever._tfidf = TfidfIndex.from_dict(data["tfidf"])
         retriever._bm25 = BM25Index.from_dict(data["bm25"])
         return retriever
@@ -127,9 +178,20 @@ class ContextualLexicalRetriever(LexicalRetriever):
         return self._contextualizer
 
     def index(self, documents: List[Document]) -> None:
+        # Enrichment only ever alters `text` (prepending LLM-generated
+        # context); span metadata (source_path/start_line/end_line) is
+        # carried through unchanged so results still resolve to the
+        # original file:line location.
         contextualize = self._ensure_contextualizer()
         enriched = [
-            Document(d.docid, f"{contextualize(d.text)} {d.text}".strip(), d.url)
+            Document(
+                docid=d.docid,
+                text=f"{contextualize(d.text)} {d.text}".strip(),
+                url=d.url,
+                source_path=d.source_path,
+                start_line=d.start_line,
+                end_line=d.end_line,
+            )
             for d in documents
         ]
         super().index(enriched)
@@ -146,14 +208,16 @@ class TurbovecRetriever:
     name = "turbovec (dense ann)"
 
     #: Bump when the persisted dict shape changes incompatibly (see
-    #: ``LexicalRetriever.SCHEMA_VERSION``).
-    SCHEMA_VERSION = 1
+    #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
+    #: metadata).
+    SCHEMA_VERSION = 2
 
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
                  bit_width: int = 4) -> None:
         self._model_name = model_name
         self._bit_width = bit_width
         self._docids: List[str] = []
+        self._units: List[Dict[str, Any]] = []
         self._index = None
         self._embedder = None
         self._vectors: Optional[List[List[float]]] = None
@@ -176,7 +240,8 @@ class TurbovecRetriever:
         SentenceTransformer, TurboQuantIndex = self._require_backends()
         import numpy as np  # provided by the turbovec/local extras
 
-        self._docids = [d.docid for d in documents]
+        self._units = _units_from_documents(documents)
+        self._docids = [u["docid"] for u in self._units]
         self._embedder = SentenceTransformer(self._model_name)
         vectors = np.ascontiguousarray(
             self._embedder.encode(
@@ -198,7 +263,7 @@ class TurbovecRetriever:
             self._embedder = SentenceTransformer(self._model_name)
         return self._embedder
 
-    def search(self, query: str, top_k: int) -> List[str]:
+    def search_detailed(self, query: str, top_k: int) -> List[SearchHit]:
         if self._index is None:
             raise RuntimeError("call index() before search()")
         embedder = self._ensure_embedder()
@@ -213,7 +278,10 @@ class TurbovecRetriever:
             dtype=np.float32,
         )
         _scores, handles = self._index.search(q, min(top_k, len(self._docids)))
-        return [self._docids[i] for i in handles[0]]
+        return _hits_from_units(self._units, list(handles[0]))
+
+    def search(self, query: str, top_k: int) -> List[str]:
+        return [h.docid for h in self.search_detailed(query, top_k)]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a JSON-safe dict (docids + raw embedding vectors).
@@ -229,6 +297,7 @@ class TurbovecRetriever:
             "model_name": self._model_name,
             "bit_width": self._bit_width,
             "docids": self._docids,
+            "units": self._units,
             "vectors": self._vectors,
         }
 
@@ -249,6 +318,7 @@ class TurbovecRetriever:
 
         vectors = np.ascontiguousarray(np.asarray(data["vectors"], dtype=np.float32))
         retriever._docids = data["docids"]
+        retriever._units = data["units"]
         retriever._vectors = data["vectors"]
         retriever._index = TurboQuantIndex(dim=vectors.shape[1], bit_width=retriever._bit_width)
         retriever._index.add(vectors)
@@ -265,8 +335,9 @@ class PiSeriniRetriever:
     name = "pi-serini (lucene bm25)"
 
     #: Bump when the persisted dict shape changes incompatibly (see
-    #: ``LexicalRetriever.SCHEMA_VERSION``).
-    SCHEMA_VERSION = 1
+    #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
+    #: metadata).
+    SCHEMA_VERSION = 2
 
     def __init__(self, k1: float = 0.9, b: float = 0.4,
                  index_path: "Optional[Path | str]" = None) -> None:
@@ -278,6 +349,8 @@ class PiSeriniRetriever:
         # throwaway tempdir, matching the original in-memory-style behavior.
         self._index_dir = str(index_path) if index_path is not None else None
         self._docids: List[str] = []
+        self._units: List[Dict[str, Any]] = []
+        self._units_by_docid: Dict[str, Dict[str, Any]] = {}
 
     def _require_backend(self):
         try:
@@ -303,19 +376,39 @@ class PiSeriniRetriever:
             shutil.rmtree(self._index_dir, ignore_errors=True)
             Path(self._index_dir).mkdir(parents=True, exist_ok=True)
         indexer = LuceneIndexer(self._index_dir)
+        # Lucene doc id is the chunk docid ("path:start-end"); spans are
+        # resolved via self._units_by_docid at search time, never by parsing
+        # the id string back apart.
         indexer.add_batch_dict(
             [{"id": d.docid, "contents": d.text} for d in documents]
         )
         indexer.close()
-        self._docids = [d.docid for d in documents]
+        self._units = _units_from_documents(documents)
+        self._docids = [u["docid"] for u in self._units]
+        self._units_by_docid = {u["docid"]: u for u in self._units}
         self._searcher = LuceneSearcher(self._index_dir)
         self._searcher.set_bm25(self._k1, self._b)
 
-    def search(self, query: str, top_k: int) -> List[str]:
+    def search_detailed(self, query: str, top_k: int) -> List[SearchHit]:
         if self._searcher is None:
             raise RuntimeError("call index() before search()")
         hits = self._searcher.search(query, k=top_k)
-        return [hit.docid for hit in hits]
+        results = []
+        for rank, hit in enumerate(hits):
+            unit = self._units_by_docid[hit.docid]
+            results.append(
+                SearchHit(
+                    docid=unit["docid"],
+                    source_path=unit["source_path"],
+                    start_line=unit["start_line"],
+                    end_line=unit["end_line"],
+                    rank=rank,
+                )
+            )
+        return results
+
+    def search(self, query: str, top_k: int) -> List[str]:
+        return [h.docid for h in self.search_detailed(query, top_k)]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a JSON-safe pointer at the on-disk Lucene index.
@@ -333,6 +426,7 @@ class PiSeriniRetriever:
             "b": self._b,
             "index_dir": self._index_dir,
             "docids": self._docids,
+            "units": self._units,
         }
 
     @classmethod
@@ -352,6 +446,8 @@ class PiSeriniRetriever:
         retriever = cls(k1=data["k1"], b=data["b"], index_path=index_dir)
         _LuceneIndexer, LuceneSearcher = retriever._require_backend()
         retriever._docids = data["docids"]
+        retriever._units = data["units"]
+        retriever._units_by_docid = {u["docid"]: u for u in retriever._units}
         retriever._searcher = LuceneSearcher(index_dir)
         retriever._searcher.set_bm25(retriever._k1, retriever._b)
         return retriever
@@ -370,20 +466,26 @@ class HybridRetriever:
     name = "hybrid (lexical+turbovec rrf)"
 
     #: Bump when the persisted dict shape changes incompatibly (see
-    #: ``LexicalRetriever.SCHEMA_VERSION``).
-    SCHEMA_VERSION = 1
+    #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
+    #: metadata).
+    SCHEMA_VERSION = 2
 
     def __init__(self, dense: Optional[TurbovecRetriever] = None) -> None:
         self._lexical = LexicalRetriever()
         self._dense = dense if dense is not None else TurbovecRetriever()
+        self._units_by_docid: Dict[str, Dict[str, Any]] = {}
 
     def index(self, documents: List[Document]) -> None:
         # Dense arm first: it fails fast (with opt-in guidance) when the
         # turbovec extras are missing, before any lexical work is done.
+        # Both arms index the identical chunk-Documents, so RRF-by-docid
+        # fusion below is unaffected by span metadata.
         self._dense.index(documents)
         self._lexical.index(documents)
+        units = _units_from_documents(documents)
+        self._units_by_docid = {u["docid"]: u for u in units}
 
-    def search(self, query: str, top_k: int) -> List[str]:
+    def search_detailed(self, query: str, top_k: int) -> List[SearchHit]:
         # Pull a deeper candidate pool from each arm than the caller asked
         # for, so RRF has overlap to work with before truncating to top_k.
         pool = max(top_k * 3, 10)
@@ -395,7 +497,23 @@ class HybridRetriever:
             [to_idx[d] for d in lexical_docids],
             [to_idx[d] for d in dense_docids],
         ])
-        return [all_docids[idx] for idx, _score in fused[:top_k]]
+        results = []
+        for rank, (idx, _score) in enumerate(fused[:top_k]):
+            docid = all_docids[idx]
+            unit = self._units_by_docid[docid]
+            results.append(
+                SearchHit(
+                    docid=unit["docid"],
+                    source_path=unit["source_path"],
+                    start_line=unit["start_line"],
+                    end_line=unit["end_line"],
+                    rank=rank,
+                )
+            )
+        return results
+
+    def search(self, query: str, top_k: int) -> List[str]:
+        return [h.docid for h in self.search_detailed(query, top_k)]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize both arms to a JSON-safe dict for on-disk persistence."""
@@ -403,6 +521,7 @@ class HybridRetriever:
         return {
             "schema": self.SCHEMA_VERSION,
             "docids": lexical_data["docids"],
+            "units": lexical_data["units"],
             "lexical": lexical_data,
             "dense": self._dense.to_dict(),
         }
@@ -420,6 +539,7 @@ class HybridRetriever:
         retriever = cls()
         retriever._lexical = LexicalRetriever.from_dict(data["lexical"])
         retriever._dense = TurbovecRetriever.from_dict(data["dense"])
+        retriever._units_by_docid = {u["docid"]: u for u in data["units"]}
         return retriever
 
 

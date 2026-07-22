@@ -26,6 +26,8 @@ def _make_chunk(
         heading=heading,
         text=text,
         position=position,
+        start_line=1,
+        end_line=1,
     )
 
 

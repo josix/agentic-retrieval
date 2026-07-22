@@ -32,6 +32,11 @@ Build and persist an index for a project root.
 Each retriever has its own cache slot per project, so e.g. a fresh
 `lexical` cache never short-circuits a `hybrid` build.
 
+Indexing is **chunk**-granularity: `index` chunks every discovered file
+(`retrieval.project_loader.load_chunk_documents`) and persists one entry
+per chunk span, docid `"{path}:{start}-{end}"`. This is what lets `query`
+return file:line spans instead of whole-file docids.
+
 ### Default (`all`) — build every strategy in one pass
 
 With no `--retriever` (or `--retriever all`), `index` builds each strategy in
@@ -40,7 +45,7 @@ With no `--retriever` (or `--retriever all`), `index` builds each strategy in
 For each strategy, in order: if a fresh cache exists and `--force` wasn't
 passed, prints `<name>: up to date (use --force to rebuild)` and moves on;
 otherwise it builds and persists that strategy, printing
-`<name>: indexed <N> docs`. If a strategy's optional extras are missing, it
+`<name>: indexed <N> chunks`. If a strategy's optional extras are missing, it
 prints `<name>: skipped (<reason>)` **instead of failing** — this is the
 "graceful degradation" mode: the whole run still exits `0` as long as the
 always-available `lexical` strategy itself built (or was already fresh).
@@ -48,9 +53,9 @@ A final `-> <cache-dir>` line is printed. Sample output when `turbovec` is
 uninstalled:
 
 ```
-lexical: indexed 42 docs
+lexical: indexed 118 chunks
 turbovec: skipped (turbovec retriever needs the 'turbovec' + 'local' extras:)
-pi-serini: indexed 42 docs
+pi-serini: indexed 118 chunks
 hybrid: skipped (turbovec retriever needs the 'turbovec' + 'local' extras:)
 -> /home/user/.cache/agentic-retrieval/indexes/<project-key>
 ```
@@ -66,8 +71,8 @@ to build just one strategy. This form does **not** degrade gracefully:
 without `--force`, if a fresh cache already exists for the chosen retriever,
 `index` skips the rebuild and prints `<retriever> index up to date -> <dir>
 (use --force to rebuild)`, returning exit code 0. Otherwise it builds the
-retriever over `load_documents(root)`, persists it, and prints
-`indexed <N> docs -> <dir>  fingerprint=<12-char prefix>`.
+retriever over `load_chunk_documents(root)`, persists it, and prints
+`indexed <N> chunks -> <dir>  fingerprint=<12-char prefix>`.
 
 Optional extras per retriever: `lexical` needs none; `lexical+ctx` needs the
 contextualizer's own dependencies; `turbovec` and `hybrid` need the
@@ -85,7 +90,7 @@ Search the persisted index for a project root.
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to search |
 | `--retriever {lexical,lexical+ctx,turbovec,pi-serini,hybrid}` | `lexical` | Retriever to use if the index needs (re)building |
 | `--top-k N` | `5` | Number of results |
-| `--json` | off | Emit `{"query": ..., "results": [...]}` instead of one docid per line |
+| `--json` | off | Emit `{"query": ..., "results": [{"docid", "path", "start_line", "end_line", "rank"}, ...]}` instead of one `path:start-end` span per line |
 | `--stale-ok` | off | Search the cached index even if it's stale, instead of auto-reindexing |
 
 If the cache is missing, or present but stale (and `--stale-ok` is not
@@ -109,9 +114,9 @@ cached retriever, blank-line separated), without searching or rebuilding.
 | --- | --- | --- |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to report on |
 
-Prints `retriever`, `root`, `docs`, `created`, `engine`, `stale`, and
-`cache` (the on-disk directory) per cached retriever. If no cache exists,
-prints
+Prints `retriever`, `root`, `chunks` (chunk count), `files` (distinct
+source-file count), `created`, `engine`, `stale`, and `cache` (the on-disk
+directory) per cached retriever. If no cache exists, prints
 `no cache for <root> (dir=<cache-dir>)` and returns exit code 0.
 
 ## Exit codes
@@ -125,8 +130,14 @@ prints
 ## Output formats
 
 - `index`: a single status line to stdout (fast-path or rebuilt message).
-- `query` (default): one docid per line, best match first, no scores.
-- `query --json`: a single JSON object, `{"query": "<text>", "results": ["<docid>", ...]}`.
+- `query` (default): one `source_path:start_line-end_line` span per line,
+  best match first, no scores. Feed a span straight to
+  `Read(path, offset=start_line, limit=end_line-start_line+1)`.
+- `query --json`: a single JSON object, `{"query": "<text>", "results":
+  [{"docid": "<path:start-end>", "path": "<source_path>", "start_line":
+  <int>, "end_line": <int>, "rank": <int>}, ...]}`. **Breaking change from
+  0.2.0**: `results` used to be a flat list of docid strings; it is now a
+  list of objects — see [changelog](../changelog.md).
 - `stats`: a fixed set of `key: value` lines to stdout.
 
 ## `--root` resolution order

@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+- **Chunk-level indexing with file:line spans.** All five production
+  retrievers now index chunk-granularity `Document`s
+  (`retrieval.project_loader.load_chunk_documents`) instead of whole
+  files: `docid` is `"{path}:{start}-{end}"`, and each `Document` carries
+  `source_path`/`start_line`/`end_line` span metadata. Every retriever
+  gained `search_detailed(query, top_k) -> List[SearchHit]`, resolving
+  each result's span from that metadata (never by parsing the docid
+  string). `search()` is now a thin `[h.docid for h in
+  search_detailed(...)]` projection, kept for backward compatibility.
+- **Chunker line-span tracking.** `retrieval.chunker.Chunk` gained
+  `start_line`/`end_line` (1-based, inclusive); `chunk_document` tracks
+  source line numbers for every paragraph and extends a chunk's span to
+  include the heading line that introduced it.
+- **Breaking: `retrieval query --json` output shape.** `results` was a
+  flat list of docid strings; it is now a list of objects
+  (`{"docid", "path", "start_line", "end_line", "rank"}`). Plain-text
+  `query` output changed from one docid per line to one
+  `path:start_line-end_line` span per line.
+- **Cache schema bump (v1 -> v2).** Every retriever's `SCHEMA_VERSION`
+  bumped to persist the new chunk-span `units`; a v1 on-disk cache is
+  treated as unrecognized and auto-rebuilt on the next `index`/`query` —
+  no manual cache-clearing needed.
+- `retrieval index` prints `<name>: indexed <N> chunks` (was `... docs`);
+  `retrieval stats` prints both `chunks:` (chunk count) and `files:`
+  (distinct source-file count) instead of a single `docs:` line. The
+  cache's `meta.json` gained a `file_count` field alongside the existing
+  (now chunk-counting) `doc_count`.
+
 ## 0.2.0
 
 - Persistent, on-disk index cache (`retrieval.persistence`) keyed by

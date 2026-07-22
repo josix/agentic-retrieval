@@ -25,6 +25,14 @@ root, the cache's ``lexical.json``/``meta.json`` get swept up as documents
 on the next index/query run (a feedback loop) — only a directory literally
 named ``.cache`` is excluded by default, so any other cache dirname is
 fair game for re-indexing.
+
+Since retrievers now index chunk-granularity Documents (see
+``retrieval.project_loader.load_chunk_documents``), a meta file's
+``doc_count`` is a **chunk** count (one chunk-Document per indexed span,
+docid ``"{path}:{start}-{end}"``), while ``file_count`` is the number of
+distinct source files those chunks came from (``len(set(source_path for
+each unit))``) — the two will usually differ once a file yields more than
+one chunk.
 """
 
 import hashlib
@@ -147,12 +155,15 @@ def save_index(
     data = retriever.to_dict()
     _atomic_write_json(directory / data_filename, data)
 
+    units = data.get("units", [])
+    file_count = len({u["source_path"] for u in units}) if units else 0
     meta = {
         "fingerprint": fingerprint,
         "corpus_root": Path(root).resolve().as_posix(),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "engine_version": engine_version,
         "doc_count": len(data.get("docids", [])),
+        "file_count": file_count,
         "retriever_name": retriever_name,
     }
     _atomic_write_json(directory / meta_filename, meta)

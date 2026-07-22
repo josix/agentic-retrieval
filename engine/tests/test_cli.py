@@ -82,7 +82,7 @@ class TestCli(unittest.TestCase):
     def test_index_returns_zero_and_writes_cache_files(self) -> None:
         code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
         self.assertEqual(code, 0)
-        self.assertIn("indexed 2 docs ->", out)
+        self.assertIn("indexed 2 chunks ->", out)
         self.assertIn("fingerprint=", out)
 
         directory = index_dir(self.root)
@@ -113,7 +113,7 @@ class TestCli(unittest.TestCase):
         time.sleep(0.01)  # ensure a detectable mtime/created_at difference
         code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical", "--force"])
         self.assertEqual(code, 0)
-        self.assertIn("indexed 2 docs ->", out)
+        self.assertIn("indexed 2 chunks ->", out)
         self.assertNotEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
 
     def test_index_without_force_rebuilds_when_corpus_is_stale(self) -> None:
@@ -129,7 +129,7 @@ class TestCli(unittest.TestCase):
 
         code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
         self.assertEqual(code, 0)
-        self.assertIn("indexed 3 docs ->", out)
+        self.assertIn("indexed 3 chunks ->", out)
         self.assertNotEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
 
     def test_query_returns_zero_and_expected_docid(self) -> None:
@@ -141,7 +141,7 @@ class TestCli(unittest.TestCase):
              "--root", str(self.root), "--top-k", "1"]
         )
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "a.txt")
+        self.assertEqual(out.strip(), "a.txt:1-1")
 
     def test_query_without_cache_auto_indexes(self) -> None:
         # No prior "index" call — query must build + persist the cache itself.
@@ -150,7 +150,7 @@ class TestCli(unittest.TestCase):
              "--root", str(self.root), "--top-k", "1"]
         )
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "a.txt")
+        self.assertEqual(out.strip(), "a.txt:1-1")
         directory = index_dir(self.root)
         self.assertTrue((directory / "lexical.json").exists())
 
@@ -163,7 +163,7 @@ class TestCli(unittest.TestCase):
              "--root", str(self.root), "--top-k", "1", "--stale-ok"]
         )
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "a.txt")
+        self.assertEqual(out.strip(), "a.txt:1-1")
         directory = index_dir(self.root)
         self.assertTrue((directory / "lexical.json").exists())
 
@@ -180,7 +180,7 @@ class TestCli(unittest.TestCase):
             ["query", "asteroid belt mars jupiter", "--root", str(self.root), "--top-k", "1"]
         )
         self.assertEqual(code, 0)
-        self.assertEqual(out.strip(), "c.txt")
+        self.assertEqual(out.strip(), "c.txt:1-1")
 
     def test_stale_ok_returns_stale_results_without_reindexing(self) -> None:
         code, _out = _run(["index", "--root", str(self.root)])
@@ -215,7 +215,8 @@ class TestCli(unittest.TestCase):
 
         code, out = _run(["stats", "--root", str(self.root)])
         self.assertEqual(code, 0)
-        self.assertIn("docs: 2", out)
+        self.assertIn("chunks: 2", out)
+        self.assertIn("files: 2", out)
         self.assertIn("stale: False", out)
 
     def test_json_output_parses(self) -> None:
@@ -236,7 +237,13 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 0)
         payload = json.loads(out)
         self.assertEqual(payload["query"], "what carries data between networks")
-        self.assertEqual(payload["results"], ["a.txt"])
+        self.assertEqual(len(payload["results"]), 1)
+        result = payload["results"][0]
+        self.assertEqual(result["docid"], "a.txt:1-1")
+        self.assertEqual(result["path"], "a.txt")
+        self.assertEqual(result["start_line"], 1)
+        self.assertEqual(result["end_line"], 1)
+        self.assertEqual(result["rank"], 0)
 
     def test_stats_reports_retriever_name(self) -> None:
         code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
@@ -283,7 +290,7 @@ class TestCli(unittest.TestCase):
     def test_index_default_builds_all_and_core_always_succeeds(self) -> None:
         code, out = _run(["index", "--root", str(self.root)])
         self.assertEqual(code, 0)
-        self.assertIn("lexical: indexed 2 docs", out)
+        self.assertIn("lexical: indexed 2 chunks", out)
 
         directory = index_dir(self.root)
         self.assertTrue((directory / "lexical.json").exists())

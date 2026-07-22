@@ -1,6 +1,9 @@
 # `retrieval.project_loader`
 
-`discover_files` / `load_documents` / `load_chunks` over a project root.
+`discover_files` / `load_documents` / `load_chunks` / `load_chunk_documents`
+over a project root. `load_chunk_documents` is the production loader that
+the five production retrievers index over — it returns one
+chunk-granularity `Document` per span (`docid = "{path}:{start}-{end}"`).
 
 ::: retrieval.project_loader
 

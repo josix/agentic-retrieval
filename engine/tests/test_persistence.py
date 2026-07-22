@@ -29,7 +29,7 @@ from retrieval.persistence import (  # noqa: E402
     project_key,
     save_index,
 )
-from retrieval.project_loader import load_documents  # noqa: E402
+from retrieval.project_loader import load_chunk_documents, load_documents  # noqa: E402
 from retrieval.retrievers import HybridRetriever, LexicalRetriever, TurbovecRetriever  # noqa: E402
 from retrieval.tfidf import TfidfIndex  # noqa: E402
 
@@ -135,6 +135,25 @@ class TestPersistence(unittest.TestCase):
         with self.assertRaises(ValueError):
             LexicalRetriever.from_dict(data)
 
+    def test_stale_v1_schema_cache_forces_rebuild(self) -> None:
+        """A v1 (pre-units) on-disk cache must not be mis-parsed: load_index
+        treats an unrecognized schema as "no usable cache", so callers fall
+        back to a fresh rebuild rather than crashing or silently missing spans."""
+        docs = load_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.2.0")
+
+        directory = index_dir(self.root)
+        data = json.loads((directory / "lexical.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["schema"], 2)
+        # Simulate a stale v1 cache (no "units" key, old schema number).
+        data["schema"] = 1
+        del data["units"]
+        (directory / "lexical.json").write_text(json.dumps(data), encoding="utf-8")
+
+        self.assertIsNone(load_index(self.root, "lexical"))
+
     # -- fingerprint --------------------------------------------------------
 
     def test_fingerprint_is_stable_across_calls(self) -> None:
@@ -238,6 +257,20 @@ class TestPersistence(unittest.TestCase):
         cached = cached_retrievers(self.root)
         self.assertEqual(list(cached), ["lexical"])
         self.assertEqual(cached["lexical"]["doc_count"], 3)
+
+    def test_doc_count_is_chunks_and_file_count_is_distinct_files(self) -> None:
+        """doc_count counts chunk-Documents (one per span); file_count
+        counts distinct source files those chunks came from."""
+        chunk_docs = load_chunk_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(chunk_docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.2.0")
+
+        directory = index_dir(self.root)
+        meta = json.loads((directory / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["doc_count"], len(chunk_docs))
+        self.assertEqual(meta["file_count"], 3)  # a.txt, b.txt, sub/c.md
+        self.assertGreaterEqual(meta["doc_count"], meta["file_count"])
 
     def test_lexical_ctx_shares_the_lexical_slot(self) -> None:
         retriever = LexicalRetriever()

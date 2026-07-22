@@ -260,3 +260,35 @@ def load_chunks(
     for document in load_documents(root, **kw):
         chunks.extend(chunk_document(document.docid, document.text))
     return chunks
+
+
+def load_chunk_documents(
+    root: "os.PathLike[str] | str",
+    **kw,
+) -> List[Document]:
+    """Discover files under *root*, chunk each one, and return one chunk-
+    granularity ``Document`` per chunk.
+
+    Each returned ``Document``'s ``docid`` is ``"{path}:{start}-{end}"``
+    (the file's relative POSIX path plus its 1-based line span), with
+    ``source_path``/``start_line``/``end_line`` set from the chunk's span —
+    this is what the production retrievers (see ``retrieval/retrievers.py``)
+    index so search results can point a coding agent at an exact
+    ``file:line`` location. A file with only blank content yields no chunks
+    and therefore no Documents.
+    """
+    documents: List[Document] = []
+    for document in load_documents(root, **kw):
+        for chunk in chunk_document(document.docid, document.text):
+            docid = f"{document.docid}:{chunk.start_line}-{chunk.end_line}"
+            documents.append(
+                Document(
+                    docid=docid,
+                    text=chunk.text,
+                    url=document.url,
+                    source_path=document.docid,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                )
+            )
+    return documents

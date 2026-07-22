@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from retrieval import __version__
+from retrieval.document import SearchHit
 from retrieval.persistence import (
     cached_retrievers,
     compute_fingerprint,
@@ -27,7 +28,7 @@ from retrieval.persistence import (
     load_index,
     save_index,
 )
-from retrieval.project_loader import load_documents
+from retrieval.project_loader import load_chunk_documents
 from retrieval.retrievers import PiSeriniRetriever, Retriever, build_retriever
 
 _RETRIEVER_CHOICES = ("lexical", "lexical+ctx", "turbovec", "pi-serini", "hybrid")
@@ -109,7 +110,7 @@ def _build_and_save(root: Path, retriever_name: str) -> Retriever:
     """Build a fresh retriever over *root* and persist it; return the retriever."""
     fingerprint = compute_fingerprint(root)
     retriever = _make_retriever(root, retriever_name)
-    retriever.index(load_documents(root))
+    retriever.index(load_chunk_documents(root))
     save_index(retriever, root, fingerprint, retriever_name, __version__)
     return retriever
 
@@ -142,8 +143,8 @@ def _index_all(root: Path, force: bool) -> int:
             continue
         try:
             retriever = _build_and_save(root, name)
-            doc_count = len(retriever.to_dict()["docids"])
-            print(f"{name}: indexed {doc_count} docs")
+            chunk_count = len(retriever.to_dict()["docids"])
+            print(f"{name}: indexed {chunk_count} chunks")
         except RuntimeError as exc:
             print(f"{name}: skipped ({str(exc).splitlines()[0]})")
             if name == "lexical":
@@ -163,10 +164,10 @@ def _cmd_index(args: argparse.Namespace) -> int:
             return 0
     fingerprint = compute_fingerprint(root)
     retriever = _make_retriever(root, args.retriever)
-    retriever.index(load_documents(root))
+    retriever.index(load_chunk_documents(root))
     saved_dir = save_index(retriever, root, fingerprint, args.retriever, __version__)
-    doc_count = len(retriever.to_dict()["docids"])
-    print(f"indexed {doc_count} docs -> {saved_dir}  fingerprint={fingerprint[:12]}")
+    chunk_count = len(retriever.to_dict()["docids"])
+    print(f"indexed {chunk_count} chunks -> {saved_dir}  fingerprint={fingerprint[:12]}")
     return 0
 
 
@@ -181,15 +182,25 @@ def _load_or_rebuild(root: Path, retriever_name: str, stale_ok: bool) -> Retriev
     return retriever
 
 
+def _hit_to_json(hit: SearchHit) -> Dict[str, Any]:
+    return {
+        "docid": hit.docid,
+        "path": hit.source_path,
+        "start_line": hit.start_line,
+        "end_line": hit.end_line,
+        "rank": hit.rank,
+    }
+
+
 def _cmd_query(args: argparse.Namespace) -> int:
     root = _resolve_root(args.root)
     retriever = _load_or_rebuild(root, args.retriever, args.stale_ok)
-    results: List[str] = retriever.search(args.query, args.top_k)
+    hits: List[SearchHit] = retriever.search_detailed(args.query, args.top_k)
     if args.json:
-        print(json.dumps({"query": args.query, "results": results}))
+        print(json.dumps({"query": args.query, "results": [_hit_to_json(h) for h in hits]}))
     else:
-        for docid in results:
-            print(docid)
+        for hit in hits:
+            print(f"{hit.source_path}:{hit.start_line}-{hit.end_line}")
     return 0
 
 
@@ -197,7 +208,8 @@ def _print_stats(root: Path, retriever_name: str, meta: Dict[str, Any]) -> None:
     stale = is_stale(root, meta)
     print(f"retriever: {retriever_name}")
     print(f"root: {meta.get('corpus_root')}")
-    print(f"docs: {meta.get('doc_count')}")
+    print(f"chunks: {meta.get('doc_count')}")
+    print(f"files: {meta.get('file_count')}")
     print(f"created: {meta.get('created_at')}")
     print(f"engine: {meta.get('engine_version')}")
     print(f"stale: {stale}")

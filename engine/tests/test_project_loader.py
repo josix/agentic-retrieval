@@ -18,6 +18,7 @@ if str(_ROOT_DIR) not in sys.path:
 from retrieval.project_loader import (  # noqa: E402
     MAX_FILE_BYTES,
     discover_files,
+    load_chunk_documents,
     load_chunks,
     load_documents,
     read_text_safe,
@@ -148,6 +149,31 @@ class TestProjectLoader(unittest.TestCase):
             _write(root / "Dockerfile", "a" * (MAX_FILE_BYTES + 1))
             discovered = discover_files(root)
             self.assertEqual(discovered, [])
+
+    def test_load_chunk_documents_docids_are_path_start_end(self) -> None:
+        docs = load_chunk_documents(self.root)
+        self.assertGreater(len(docs), 0)
+        for doc in docs:
+            self.assertIn(":", doc.docid)
+            path_part, span_part = doc.docid.rsplit(":", 1)
+            start_str, end_str = span_part.split("-")
+            self.assertEqual(path_part, doc.source_path)
+            self.assertEqual(int(start_str), doc.start_line)
+            self.assertEqual(int(end_str), doc.end_line)
+            self.assertLessEqual(doc.start_line, doc.end_line)
+
+    def test_load_chunk_documents_source_paths_match_load_documents(self) -> None:
+        docs = load_chunk_documents(self.root)
+        source_paths = {doc.source_path for doc in docs}
+        whole_docids = {doc.docid for doc in load_documents(self.root)}
+        self.assertEqual(source_paths, whole_docids)
+
+    def test_load_chunk_documents_blank_file_yields_no_units(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "blank.txt", "   \n\n  \n")
+            docs = load_chunk_documents(root)
+            self.assertEqual(docs, [])
 
 
 if __name__ == "__main__":
