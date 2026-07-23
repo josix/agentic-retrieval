@@ -446,6 +446,10 @@ class TestCli(unittest.TestCase):
         _TREESITTER_INSTALLED, "tree-sitter-language-pack installed; skip path not exercised"
     )
     def test_index_all_skips_treesitter_when_extras_missing(self) -> None:
+        # A real code file forces language_for_path -> chunk_code, whose guidance
+        # RuntimeError is the skip signal when the treesitter extra is absent.
+        _write(self.root / "sample.py", "def hello():\n    return 42\n")
+
         code, out = _run(["index", "--root", str(self.root)])
         self.assertEqual(code, 0)
         self.assertIn("treesitter: skipped", out)
