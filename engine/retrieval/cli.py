@@ -1,10 +1,11 @@
-"""``retrieval`` console-script CLI: setup/index/query/stats over persisted,
-on-disk retriever indexes.
+"""``retrieval`` console-script CLI: setup/index/query/stats/eval over
+persisted, on-disk retriever indexes.
 
 Thin argparse dispatcher over ``retrieval.persistence`` + ``retrieval.retrievers``
 — every subcommand resolves a project root (``--root`` -> ``RETRIEVAL_ROOT`` env
 -> cwd), then either builds+saves a fresh index (``index``), loads/reindexes and
-searches it (``query``), or reports on the caches (``stats``). ``query``'s
+searches it (``query``), reports on the caches (``stats``), or runs the
+labeled-query eval harness in-memory with no persistence (``eval``). ``query``'s
 default (``--retriever all``) consolidates every available strategy's
 ranking into one deduplicated, explainable list via
 ``retrieval.consolidation.consolidate``; pass an explicit ``--retriever
@@ -27,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from retrieval import __version__
 from retrieval.consolidation import ConsolidatedHit, consolidate
 from retrieval.document import SearchHit
+from retrieval.eval import format_report_text, report_to_dict, run_eval
 from retrieval.persistence import (
     cached_retrievers,
     compute_fingerprint,
@@ -114,6 +116,33 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     stats_parser.add_argument(
         "--root", help="project root to report on (default: RETRIEVAL_ROOT or cwd)"
+    )
+
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="run the labeled-query eval harness (recall@k/nDCG@k, confidence "
+        "validity, cold/warm latency) in-memory, no persistence",
+    )
+    eval_parser.add_argument(
+        "--queries", required=True, help="path to a labeled eval_queries.json file"
+    )
+    eval_parser.add_argument(
+        "--root",
+        help="corpus root to eval against (default: the queries file's own "
+        "'corpus_root', resolved relative to the queries file)",
+    )
+    eval_parser.add_argument(
+        "--k", type=int, default=5, help="recall@k / nDCG@k cutoff (default: 5)"
+    )
+    eval_parser.add_argument(
+        "--warm-runs", type=int, default=5,
+        help="number of extra warm search repeats per query (default: 5)",
+    )
+    eval_parser.add_argument(
+        "--json", action="store_true", help="emit a JSON report instead of text"
+    )
+    eval_parser.add_argument(
+        "--output", default=None, help="also write the report to this path"
     )
 
     return parser
@@ -359,10 +388,24 @@ def _cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    report = run_eval(args.queries, root=args.root, k=args.k, warm_runs=args.warm_runs)
+    envelope = report_to_dict(report)
+    _write_output(args.output, envelope)
+    if args.json:
+        print(json.dumps(envelope))
+    else:
+        print(format_report_text(report))
+    # Mirror the query/index convention: exit 0 as long as the always-
+    # available `lexical` strategy produced at least one query result.
+    return 1 if "lexical" not in report.aggregate else 0
+
+
 _COMMANDS = {
     "index": _cmd_index,
     "query": _cmd_query,
     "stats": _cmd_stats,
+    "eval": _cmd_eval,
 }
 
 

@@ -1,0 +1,16 @@
+Data Communication Systems
+
+Overview:
+Interconnected devices exchange packets across shared infrastructure to reach distant endpoints reliably.
+
+Addressing:
+Each node on the network is assigned a unique numeric label so that outgoing traffic knows where to go next.
+
+Congestion:
+When too many packets arrive at once, queues build up and some transmissions must be dropped or delayed.
+
+Security:
+Encryption scrambles the contents of a message so eavesdroppers cannot read it in transit.
+
+Bandwidth:
+The maximum throughput of a link is measured in bits per second and limits how much data can move at once.

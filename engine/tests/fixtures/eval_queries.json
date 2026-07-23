@@ -1,0 +1,85 @@
+{
+  "corpus_root": "eval_corpus",
+  "queries": [
+    {
+      "id": "vm1",
+      "category": "vocab-mismatch",
+      "query": "how does a machine on the network get identified",
+      "relevant": [
+        {"source_path": "networks.txt", "start_line": 6, "end_line": 7}
+      ]
+    },
+    {
+      "id": "vm2",
+      "category": "vocab-mismatch",
+      "query": "what happens when too much traffic floods a link",
+      "relevant": [
+        {"source_path": "networks.txt", "start_line": 9, "end_line": 10}
+      ]
+    },
+    {
+      "id": "vm3",
+      "category": "vocab-mismatch",
+      "query": "how do plants turn sunlight into stored fuel",
+      "relevant": [
+        {"source_path": "photosynthesis.txt", "start_line": 3, "end_line": 4}
+      ]
+    },
+    {
+      "id": "vm4",
+      "category": "vocab-mismatch",
+      "query": "why do leaves need tiny holes to breathe",
+      "relevant": [
+        {"source_path": "photosynthesis.txt", "start_line": 15, "end_line": 16}
+      ]
+    },
+    {
+      "id": "kw1",
+      "category": "exact-keyword",
+      "query": "thylakoid membrane photons",
+      "relevant": [
+        {"source_path": "photosynthesis.txt", "start_line": 6, "end_line": 7}
+      ]
+    },
+    {
+      "id": "kw2",
+      "category": "exact-keyword",
+      "query": "encryption eavesdroppers transit",
+      "relevant": [
+        {"source_path": "networks.txt", "start_line": 12, "end_line": 13}
+      ]
+    },
+    {
+      "id": "kw3",
+      "category": "exact-keyword",
+      "query": "bandwidth throughput bits per second",
+      "relevant": [
+        {"source_path": "networks.txt", "start_line": 15, "end_line": 16}
+      ]
+    },
+    {
+      "id": "code1",
+      "category": "code",
+      "query": "parse_args key value pairs",
+      "relevant": [
+        {"source_path": "sample.py", "start_line": 1, "end_line": 17}
+      ]
+    },
+    {
+      "id": "code2",
+      "category": "code",
+      "query": "ConfigLoader defaults constructor",
+      "relevant": [
+        {"source_path": "sample.py", "start_line": 13, "end_line": 17}
+      ]
+    },
+    {
+      "id": "code3",
+      "category": "code",
+      "query": "dict update merged configuration",
+      "relevant": [
+        {"source_path": "sample.py", "start_line": 19, "end_line": 22}
+      ]
+    }
+  ]
+}

@@ -20,6 +20,9 @@ retrieval query QUERY [--root ROOT]
                        # --retriever defaults to "all" (consolidated mode)
 
 retrieval stats [--root ROOT]
+
+retrieval eval --queries PATH [--root PATH] [--k 5] [--warm-runs 5]
+               [--json] [--output PATH]
 ```
 
 ## `index`
@@ -138,6 +141,29 @@ Prints `retriever`, `root`, `chunks` (chunk count), `files` (distinct
 source-file count), `created`, `engine`, `stale`, and `cache` (the on-disk
 directory) per cached retriever. If no cache exists, prints
 `no cache for <root> (dir=<cache-dir>)` and returns exit code 0.
+
+## `eval`
+
+Run the labeled-query eval harness — recall@k/nDCG@k per retriever vs the
+consolidated fusion, confidence-signal validity, and cold/warm search
+latency — entirely in-memory (no `~/.cache/agentic-retrieval` writes). See
+[Evaluate retrievers](../how-to/evaluate-retrievers.md) for the query-set
+schema and how to read the metrics.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--queries PATH` | required | Path to a labeled `eval_queries.json` file |
+| `--root PATH` | the query set's own `corpus_root` | Override the corpus to eval against |
+| `--k N` | `5` | recall@k / nDCG@k cutoff |
+| `--warm-runs N` | `5` | Number of extra warm search repeats per query |
+| `--json` | off | Emit a JSON report instead of text |
+| `--output PATH` | none | Also write the JSON report to `PATH` |
+
+Builds every strategy in `lexical`, `turbovec`, `pi-serini`, `hybrid`,
+`treesitter` over the query set's corpus, skipping (not hard-failing) any
+whose optional extras are missing — same graceful-degradation convention as
+`index`/`query`'s default mode. Exit code `0` as long as `lexical` produced
+results; `1` only if even `lexical` is unusable.
 
 ## Exit codes
 

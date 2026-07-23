@@ -56,7 +56,10 @@ retriever a query picks turns out to be missing/skipped, fall back to
 (default, alias `--retriever all`) skips this per-method choice entirely: it
 consolidates every available strategy's ranking into one deduplicated,
 explainable list in a single call — see "Consolidating more than two
-rankings" below and `docs/how-to/consolidated-query.md`.
+rankings" below and `docs/how-to/consolidated-query.md`. Querying a single
+method instead (`--retriever <name>`) trades away that cross-retriever
+agreement signal for lower latency — see `docs/how-to/evaluate-retrievers.md`
+for measuring the tradeoff.
 
 ## Setup
 

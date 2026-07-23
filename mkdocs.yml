@@ -62,6 +62,7 @@ nav:
       - Use each retriever: how-to/use-each-retriever.md
       - Hybrid fusion: how-to/hybrid-fusion.md
       - Consolidated query (default): how-to/consolidated-query.md
+      - Evaluate retrievers: how-to/evaluate-retrievers.md
       - Enable LLM contextualization: how-to/llm-contextualization.md
       - Customize indexing: how-to/customize-indexing.md
       - Integrate coding agents: how-to/integrate-coding-agents.md

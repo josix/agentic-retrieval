@@ -188,6 +188,19 @@ method fits the question's shape:
 | Code/script; want AST-boundary spans + enclosing scope | `--retriever treesitter` |
 | Chosen backend skipped/errored | fall back to `--retriever lexical` |
 
+**Tradeoff — what single-retriever mode gives up.** Querying one strategy is
+faster (one index load + one search, no fan-out) but forfeits the
+cross-retriever *agreement* signal the consolidated default provides: with a
+single arm there is no `agreement`/`confidence` and no `score`/`provenance`
+in the output, so you lose the built-in corroboration that two independent
+methods surfaced the same span. Prefer `--retriever <name>` when you already
+know the query's shape or are latency-bound; keep the consolidated default
+(`--retriever all`) when you want that agreement-as-relevance check.
+Choosing the retriever is manual today — automatic query->retriever routing
+is a future enhancement, and the eval harness (`retrieval eval`, see
+`docs/how-to/evaluate-retrievers.md`) exists to make that decision
+data-driven.
+
 See `hybrid-retrieval-usage` for the full decision walkthrough.
 
 For LLM or heuristic contextualization before indexing (closing
