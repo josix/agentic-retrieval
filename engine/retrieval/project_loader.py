@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from retrieval.ast_chunker import chunk_code, language_for_path
 from retrieval.chunker import Chunk, chunk_document
 from retrieval.document import Document
 
@@ -87,6 +88,7 @@ DEFAULT_EXCLUDE_DIRS = frozenset(
         ".ruff_cache",
         ".tox",
         "target",
+        "site",
         ".next",
         ".cache",
         "site-packages",
@@ -260,3 +262,78 @@ def load_chunks(
     for document in load_documents(root, **kw):
         chunks.extend(chunk_document(document.docid, document.text))
     return chunks
+
+
+def load_chunk_documents(
+    root: "os.PathLike[str] | str",
+    **kw,
+) -> List[Document]:
+    """Discover files under *root*, chunk each one, and return one chunk-
+    granularity ``Document`` per chunk.
+
+    Each returned ``Document``'s ``docid`` is ``"{path}:{start}-{end}"``
+    (the file's relative POSIX path plus its 1-based line span), with
+    ``source_path``/``start_line``/``end_line`` set from the chunk's span —
+    this is what the production retrievers (see ``retrieval/retrievers.py``)
+    index so search results can point a coding agent at an exact
+    ``file:line`` location. A file with only blank content yields no chunks
+    and therefore no Documents.
+    """
+    documents: List[Document] = []
+    for document in load_documents(root, **kw):
+        for chunk in chunk_document(document.docid, document.text):
+            docid = f"{document.docid}:{chunk.start_line}-{chunk.end_line}"
+            documents.append(
+                Document(
+                    docid=docid,
+                    text=chunk.text,
+                    url=document.url,
+                    source_path=document.docid,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                )
+            )
+    return documents
+
+
+def load_ast_chunk_documents(
+    root: "os.PathLike[str] | str",
+    **kw,
+) -> List[Document]:
+    """Discover files under *root* and return one AST-boundary chunk-
+    granularity ``Document`` per chunk (see ``retrieval.ast_chunker``).
+
+    For each file, resolves a tree-sitter language from its suffix (via
+    ``language_for_path``); when a language is found, chunks with
+    ``chunk_code`` at AST node boundaries, carrying a breadcrumb
+    ``context`` (enclosing function/class path, e.g. ``"Bar.baz"``) on each
+    Document. Files with no mapped language, or whose AST chunking returns
+    no chunks (e.g. a severely broken parse), fall back to the line-based
+    ``chunk_document`` — same as ``load_chunk_documents`` — with an empty
+    ``context``.
+
+    A missing ``tree-sitter-language-pack`` install surfaces as a
+    ``RuntimeError`` (raised by ``chunk_code``) and is *not* caught here: it
+    is the signal an all-mode index run uses to skip this strategy (see
+    ``retrieval.cli._index_all``).
+    """
+    documents: List[Document] = []
+    for document in load_documents(root, **kw):
+        language = language_for_path(document.docid)
+        chunks = chunk_code(document.docid, document.text, language) if language else []
+        if not chunks:
+            chunks = chunk_document(document.docid, document.text)
+        for chunk in chunks:
+            docid = f"{document.docid}:{chunk.start_line}-{chunk.end_line}"
+            documents.append(
+                Document(
+                    docid=docid,
+                    text=chunk.text,
+                    url=document.url,
+                    source_path=document.docid,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                    context=getattr(chunk, "context", ""),
+                )
+            )
+    return documents

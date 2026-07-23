@@ -19,6 +19,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from retrieval.bm25 import BM25Index  # noqa: E402
+from retrieval.document import Document  # noqa: E402
 from retrieval.persistence import (  # noqa: E402
     cache_base_dir,
     cached_retrievers,
@@ -29,8 +30,13 @@ from retrieval.persistence import (  # noqa: E402
     project_key,
     save_index,
 )
-from retrieval.project_loader import load_documents  # noqa: E402
-from retrieval.retrievers import HybridRetriever, LexicalRetriever, TurbovecRetriever  # noqa: E402
+from retrieval.project_loader import load_chunk_documents, load_documents  # noqa: E402
+from retrieval.retrievers import (  # noqa: E402
+    HybridRetriever,
+    LexicalRetriever,
+    TreeSitterRetriever,
+    TurbovecRetriever,
+)
 from retrieval.tfidf import TfidfIndex  # noqa: E402
 
 try:
@@ -134,6 +140,25 @@ class TestPersistence(unittest.TestCase):
         data["schema"] = 999
         with self.assertRaises(ValueError):
             LexicalRetriever.from_dict(data)
+
+    def test_stale_v1_schema_cache_forces_rebuild(self) -> None:
+        """A v1 (pre-units) on-disk cache must not be mis-parsed: load_index
+        treats an unrecognized schema as "no usable cache", so callers fall
+        back to a fresh rebuild rather than crashing or silently missing spans."""
+        docs = load_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.2.0")
+
+        directory = index_dir(self.root)
+        data = json.loads((directory / "lexical.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["schema"], 2)
+        # Simulate a stale v1 cache (no "units" key, old schema number).
+        data["schema"] = 1
+        del data["units"]
+        (directory / "lexical.json").write_text(json.dumps(data), encoding="utf-8")
+
+        self.assertIsNone(load_index(self.root, "lexical"))
 
     # -- fingerprint --------------------------------------------------------
 
@@ -239,6 +264,20 @@ class TestPersistence(unittest.TestCase):
         self.assertEqual(list(cached), ["lexical"])
         self.assertEqual(cached["lexical"]["doc_count"], 3)
 
+    def test_doc_count_is_chunks_and_file_count_is_distinct_files(self) -> None:
+        """doc_count counts chunk-Documents (one per span); file_count
+        counts distinct source files those chunks came from."""
+        chunk_docs = load_chunk_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(chunk_docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.2.0")
+
+        directory = index_dir(self.root)
+        meta = json.loads((directory / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["doc_count"], len(chunk_docs))
+        self.assertEqual(meta["file_count"], 3)  # a.txt, b.txt, sub/c.md
+        self.assertGreaterEqual(meta["doc_count"], meta["file_count"])
+
     def test_lexical_ctx_shares_the_lexical_slot(self) -> None:
         retriever = LexicalRetriever()
         retriever.index(load_documents(self.root))
@@ -247,6 +286,38 @@ class TestPersistence(unittest.TestCase):
         # plain lexical load still round-trips it.
         self.assertEqual(list(cached_retrievers(self.root)), ["lexical+ctx"])
         self.assertIsNotNone(load_index(self.root, "lexical"))
+
+    def test_treesitter_round_trip_search_equality_and_context(self) -> None:
+        """TreeSitterRetriever needs no optional extras (only the ast_chunker
+        loader does), so this exercises the cache round-trip with inline
+        Documents carrying a context breadcrumb."""
+        docs = [
+            Document(
+                "d1", "def baz(self):\n    return self.value\n",
+                source_path="pkg/bar.py", start_line=10, end_line=11,
+                context="Bar.baz",
+            ),
+            Document(
+                "d2", "def qux():\n    return 42\n",
+                source_path="pkg/other.py", start_line=1, end_line=2,
+            ),
+        ]
+        retriever = TreeSitterRetriever()
+        retriever.index(docs)
+        data = retriever.to_dict()
+        json.dumps(data)  # must be JSON-safe
+        self.assertEqual(data["units"][0]["context"], "Bar.baz")
+        self.assertEqual(data["units"][1]["context"], "")
+
+        save_index(retriever, self.root, compute_fingerprint(self.root), "treesitter", "0.2.0")
+        loaded = load_index(self.root, "treesitter")
+        self.assertIsNotNone(loaded)
+        restored, _meta = loaded
+        self.assertIsInstance(restored, TreeSitterRetriever)
+        query = "baz self value"
+        self.assertEqual(retriever.search(query, top_k=2), restored.search(query, top_k=2))
+        hit = restored.search_detailed(query, top_k=1)[0]
+        self.assertEqual(hit.context, "Bar.baz")
 
     @unittest.skipUnless(_TURBOVEC_INSTALLED, "turbovec not installed")
     def test_turbovec_round_trip_search_equality(self) -> None:

@@ -18,10 +18,19 @@ if str(_ROOT_DIR) not in sys.path:
 from retrieval.project_loader import (  # noqa: E402
     MAX_FILE_BYTES,
     discover_files,
+    load_ast_chunk_documents,
+    load_chunk_documents,
     load_chunks,
     load_documents,
     read_text_safe,
 )
+
+try:
+    import tree_sitter_language_pack  # noqa: E402,F401
+
+    _TREESITTER_INSTALLED = True
+except ImportError:
+    _TREESITTER_INSTALLED = False
 
 
 def _write(path: pathlib.Path, content: str = "") -> None:
@@ -57,6 +66,7 @@ class TestProjectLoader(unittest.TestCase):
         _write(cls.root / ".venv" / "lib" / "y.py", "# vendored\n")
         _write_bytes(cls.root / "__pycache__" / "z.pyc", b"\x00\x01\x02cachedbytes")
         _write(cls.root / ".complexipy_cache" / "README.md", "# cache artifact\n")
+        _write(cls.root / "site" / "index.html", "<html>generated site output</html>")
 
         # --- secret-like filenames (allowed extension/name pattern, denied by glob) ---
         _write(cls.root / ".env", "SECRET_KEY=abc123")
@@ -94,6 +104,7 @@ class TestProjectLoader(unittest.TestCase):
             ".venv/lib/y.py",
             "__pycache__/z.pyc",
             ".complexipy_cache/README.md",
+            "site/index.html",
         ):
             self.assertNotIn(bad, self.relative)
 
@@ -148,6 +159,100 @@ class TestProjectLoader(unittest.TestCase):
             _write(root / "Dockerfile", "a" * (MAX_FILE_BYTES + 1))
             discovered = discover_files(root)
             self.assertEqual(discovered, [])
+
+    def test_load_chunk_documents_docids_are_path_start_end(self) -> None:
+        docs = load_chunk_documents(self.root)
+        self.assertGreater(len(docs), 0)
+        for doc in docs:
+            self.assertIn(":", doc.docid)
+            path_part, span_part = doc.docid.rsplit(":", 1)
+            start_str, end_str = span_part.split("-")
+            self.assertEqual(path_part, doc.source_path)
+            self.assertEqual(int(start_str), doc.start_line)
+            self.assertEqual(int(end_str), doc.end_line)
+            self.assertLessEqual(doc.start_line, doc.end_line)
+
+    def test_load_chunk_documents_source_paths_match_load_documents(self) -> None:
+        docs = load_chunk_documents(self.root)
+        source_paths = {doc.source_path for doc in docs}
+        whole_docids = {doc.docid for doc in load_documents(self.root)}
+        self.assertEqual(source_paths, whole_docids)
+
+    def test_load_chunk_documents_blank_file_yields_no_units(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "blank.txt", "   \n\n  \n")
+            docs = load_chunk_documents(root)
+            self.assertEqual(docs, [])
+
+
+@unittest.skipUnless(_TREESITTER_INSTALLED, "tree-sitter-language-pack not installed")
+class TestLoadAstChunkDocuments(unittest.TestCase):
+    """load_ast_chunk_documents: AST chunks for code, line-chunk fallback
+    for non-code files."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        cls.root = pathlib.Path(cls.tmpdir.name)
+        _write(
+            cls.root / "src" / "app.py",
+            "def foo():\n    return 1\n\n\nclass Bar:\n    def baz(self):\n        return 2\n",
+        )
+        _write(cls.root / "README.md", "# Project\n\nSome docs about routing.")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.tmpdir.cleanup()
+
+    def test_docids_keep_path_start_end_convention(self) -> None:
+        docs = load_ast_chunk_documents(self.root)
+        self.assertGreater(len(docs), 0)
+        for doc in docs:
+            self.assertIn(":", doc.docid)
+            path_part, span_part = doc.docid.rsplit(":", 1)
+            start_str, end_str = span_part.split("-")
+            self.assertEqual(path_part, doc.source_path)
+            self.assertEqual(int(start_str), doc.start_line)
+            self.assertEqual(int(end_str), doc.end_line)
+
+    def test_py_file_yields_chunks_some_with_context(self) -> None:
+        docs = load_ast_chunk_documents(self.root)
+        py_docs = [d for d in docs if d.source_path == "src/app.py"]
+        self.assertGreater(len(py_docs), 0)
+        # Small max_chars default (1200) keeps this snippet as one whole
+        # chunk with an empty top-level context; force a smaller budget to
+        # confirm nested chunks do carry a breadcrumb.
+        from retrieval.ast_chunker import chunk_code
+
+        small_chunks = chunk_code(
+            "src/app.py",
+            (self.root / "src" / "app.py").read_text(encoding="utf-8"),
+            "python",
+            max_chars=5,
+        )
+        contexts = {c.context for c in small_chunks}
+        self.assertTrue(any(c for c in contexts if c))
+
+    def test_md_file_falls_back_to_line_chunks_with_empty_context(self) -> None:
+        docs = load_ast_chunk_documents(self.root)
+        md_docs = [d for d in docs if d.source_path == "README.md"]
+        self.assertGreater(len(md_docs), 0)
+        for doc in md_docs:
+            self.assertEqual(doc.context, "")
+
+
+@unittest.skipIf(_TREESITTER_INSTALLED, "tree-sitter-language-pack is installed")
+class TestLoadAstChunkDocumentsGracefulDegradation(unittest.TestCase):
+    """A .py-only tree makes load_ast_chunk_documents raise, uncaught —
+    that RuntimeError is the all-mode index skip signal (see cli._index_all)."""
+
+    def test_raises_runtime_error_when_uninstalled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "app.py", "def foo():\n    return 1\n")
+            with self.assertRaises(RuntimeError):
+                load_ast_chunk_documents(root)
 
 
 if __name__ == "__main__":

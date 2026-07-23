@@ -1,5 +1,5 @@
 ---
-description: Compare contextual retrieval (plain and LLM-enriched), turbovec (dense ANN), pi-serini (Lucene BM25), and hybrid (lexical + dense RRF) retrieval strategies
+description: Compare contextual retrieval (plain and LLM-enriched), turbovec (dense ANN), pi-serini (Lucene BM25), hybrid (lexical + dense RRF), and tree-sitter (AST-boundary chunking) retrieval strategies
 argument-hint: [setup [all|core|<extra>...] | index [--retriever all|<name>] | query "<text>"]
 ---
 
@@ -15,15 +15,20 @@ Thin dispatcher — invoke the `retrieval` skill and follow its steps exactly.
   which is also the fallback tried first if the full sync fails
 - `index` — build and persist an on-disk index for the invoking project
   (`retrieval index --root "$PROJECT_ROOT"`); defaults to building ALL
-  strategy caches (lexical always succeeds; turbovec/pi-serini/hybrid build
-  too when their extras are present, else skipped with a note and exit 0) —
-  each strategy keeps its own cache slot per project. Pass
-  `--retriever lexical|turbovec|pi-serini|hybrid` to build a single strategy
-  instead (missing extras hard-fail with guidance, exit 1)
-- `query "<text>"` — load the persisted index (auto-reindexing if missing or
-  stale) and search it (`retrieval query "<text>" --root "$PROJECT_ROOT"`,
-  same `--retriever` choices); the coding agent picks `--retriever` per
-  question — see the routing table below
+  strategy caches (lexical always succeeds; turbovec/pi-serini/hybrid/
+  treesitter build too when their extras are present, else skipped with a
+  note and exit 0) — each strategy keeps its own cache slot per project. Pass
+  `--retriever lexical|turbovec|pi-serini|hybrid|treesitter` to build a
+  single strategy instead (missing extras hard-fail with guidance, exit 1)
+- `query "<text>"` — with no `--retriever` (the default, alias `--retriever
+  all`), loads every available strategy's persisted index (auto-reindexing
+  if missing or stale) and consolidates their rankings into a single
+  deduplicated, explainable ranked list
+  (`retrieval query "<text>" --root "$PROJECT_ROOT"`) — a handoff a
+  following conversation/agent can act on directly. Pass
+  `--retriever lexical|turbovec|pi-serini|hybrid|treesitter` to query one
+  strategy instead (byte-identical output to before consolidation existed)
+  — see the routing table below for when that's the right call
 
 ## Agent routing — which retriever to query per question
 
@@ -33,6 +38,7 @@ Thin dispatcher — invoke the `retrieval` skill and follow its steps exactly.
 | Paraphrase / synonyms / wording differs from documents | `--retriever turbovec` |
 | Lucene-grade BM25 depth/scale needed | `--retriever pi-serini` |
 | Uncertain — vocabulary mismatch vs genuine irrelevance | `--retriever hybrid` |
+| Code/script; want AST-boundary spans + enclosing scope | `--retriever treesitter` |
 | Chosen backend skipped/errored | fall back to `--retriever lexical` |
 
 See `hybrid-retrieval-usage` for the full decision walkthrough.
@@ -49,7 +55,7 @@ plus the `lexical-retrieval-usage` / `hybrid-retrieval-usage` skills.
 For per-method usage (setup, indexing/search snippets, graceful degradation,
 and combining methods), see the sibling knowledge skills:
 `lexical-retrieval-usage`, `dense-retrieval-usage`, `lucene-retrieval-usage`,
-`hybrid-retrieval-usage`.
+`code-retrieval-usage`, `hybrid-retrieval-usage`.
 
 ## Task
 

@@ -1,6 +1,6 @@
 # agentic-retrieval
 
-A Claude Code plugin + skill for comparing five retrieval strategies over
+A Claude Code plugin + skill for comparing six retrieval strategies over
 the invoking project's own files (docs/code under the project root). Ships a
 vendored, offline-first retrieval engine (`engine/`) with a stdlib-only core
 and optional per-strategy extras — no global installs, ever.
@@ -25,12 +25,14 @@ uv run --project engine --extra all retrieval query \
 | turbovec | `turbovec` | `retrieval.retrievers.TurbovecRetriever` | Dense ANN retrieval over embeddings, quantized with TurboQuant | `turbovec` + `local` |
 | pi-serini | `pi-serini` | `retrieval.retrievers.PiSeriniRetriever` | Lucene BM25 via Pyserini — the reference lexical retriever from the Pi-Serini paper | `pyserini` (+ Java 21 JDK) |
 | hybrid | `hybrid` | `retrieval.retrievers.HybridRetriever` | Lexical + dense arms over the same corpus, fused with reciprocal-rank fusion at search time | `turbovec` + `local` |
+| tree-sitter | `treesitter` | `retrieval.retrievers.TreeSitterRetriever` | `LexicalRetriever` over AST-boundary ("cAST") code chunks, carrying an enclosing function/class breadcrumb | none (base); `treesitter` for AST chunking |
 
 The `lexical` (contextual retrieval) strategy is the zero-dependency
 baseline: it always runs when searching the invoking project's own files.
-`lexical+ctx`, `turbovec`, `pi-serini`, and `hybrid` are opt-in comparison
-retrievers — if their extra isn't installed, calling `.index()` raises a
-`RuntimeError` with install instructions rather than crashing silently.
+`lexical+ctx`, `turbovec`, `pi-serini`, `hybrid`, and `treesitter` are opt-in
+comparison retrievers — if their extra isn't installed, calling `.index()`
+(or, for `treesitter`, `load_ast_chunk_documents()`) raises a `RuntimeError`
+with install instructions rather than crashing silently.
 
 ## Where to go next
 
@@ -48,9 +50,9 @@ retrievers — if their extra isn't installed, calling `.index()` raises a
   vars, engine API, troubleshooting, and the generated API pages.
 - [Changelog](changelog.md)
 
-## The five plugin skills
+## The six plugin skills
 
-As a Claude Code skill, the same flows are driven with `/retrieval`. Five
+As a Claude Code skill, the same flows are driven with `/retrieval`. Six
 skills ship with the plugin:
 
 - `skills/retrieval/SKILL.md` — the full invocation protocol (setup, index,
@@ -59,5 +61,7 @@ skills ship with the plugin:
   (TF-IDF + BM25 + RRF), the zero-dependency baseline.
 - `skills/dense-retrieval-usage/SKILL.md` — turbovec dense ANN retrieval.
 - `skills/lucene-retrieval-usage/SKILL.md` — pi-serini Lucene BM25 retrieval.
+- `skills/code-retrieval-usage/SKILL.md` — tree-sitter AST-boundary chunking
+  for code corpora.
 - `skills/hybrid-retrieval-usage/SKILL.md` — fusing methods and choosing
   between them.

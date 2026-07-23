@@ -1,8 +1,8 @@
 # `retrieval.retrievers`
 
-The `Retriever` protocol and the five retriever implementations
+The `Retriever` protocol and the six retriever implementations
 (`LexicalRetriever`, `ContextualLexicalRetriever`, `TurbovecRetriever`,
-`PiSeriniRetriever`, `HybridRetriever`), plus the `REGISTRY` and
-`build_retriever` helper.
+`PiSeriniRetriever`, `HybridRetriever`, `TreeSitterRetriever`), plus the
+`REGISTRY` and `build_retriever` helper.
 
 ::: retrieval.retrievers

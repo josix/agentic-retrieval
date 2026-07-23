@@ -53,7 +53,8 @@ the `turbovec` slot can go stale and get rebuilt independently of the
 | `corpus_root` | `str` | Resolved, absolute POSIX path of the indexed root |
 | `created_at` | `str` | UTC timestamp, `%Y-%m-%dT%H:%M:%SZ` |
 | `engine_version` | `str` | `retrieval.__version__` at index time |
-| `doc_count` | `int` | Number of documents in the index |
+| `doc_count` | `int` | Number of indexed **chunks** (one chunk-Document per span, docid `"{path}:{start}-{end}"`) — despite the name, this is a chunk count, not a file count |
+| `file_count` | `int` | Number of distinct source files those chunks came from (`len(set(unit["source_path"] for unit in units))`); usually smaller than `doc_count` once a file yields more than one chunk |
 | `retriever_name` | `str` | The `--retriever` value used to build this cache |
 
 ## Fingerprint
@@ -111,6 +112,14 @@ catches this (along with `OSError`, `json.JSONDecodeError`, `KeyError`,
 and the guidance `RuntimeError` raised when an optional backend needed to
 deserialize is missing) and returns `None`, so callers reindex from
 scratch rather than risk mis-parsing an incompatible on-disk cache.
+
+**v1 -> v2**: every retriever's `SCHEMA_VERSION` bumped from `1` to `2`
+when chunk-span metadata (`units`) was added to the persisted dict. A v1
+cache on disk (missing `units`, `schema: 1`) is treated exactly like any
+other unrecognized-schema cache: `from_dict` raises `ValueError`,
+`load_index` returns `None`, and the caller (`_build_and_save` via
+`_load_or_rebuild`/`_up_to_date_message`) transparently rebuilds a fresh v2
+cache — no manual cache-clearing step is required after upgrading.
 
 ## Next steps
 

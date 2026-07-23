@@ -61,6 +61,7 @@ nav:
       - Index and query with the CLI: how-to/index-and-query.md
       - Use each retriever: how-to/use-each-retriever.md
       - Hybrid fusion: how-to/hybrid-fusion.md
+      - Consolidated query (default): how-to/consolidated-query.md
       - Enable LLM contextualization: how-to/llm-contextualization.md
       - Customize indexing: how-to/customize-indexing.md
       - Integrate coding agents: how-to/integrate-coding-agents.md
@@ -81,5 +82,6 @@ nav:
           - document: reference/api/document.md
           - project_loader: reference/api/project_loader.md
           - fusion: reference/api/fusion.md
+          - consolidation: reference/api/consolidation.md
           - contextualizers: reference/api/contextualizers.md
   - Changelog: changelog.md

@@ -6,11 +6,15 @@ Verifies that:
    even though the chunk body does not contain those exact words.
 2. The default modules have no top-level imports of network libraries
    (socket, urllib, requests, http).
+3. The production retriever pipeline (load_chunk_documents -> index ->
+   search_detailed) returns line-spanned hits that a coding agent can turn
+   into a Read(path, offset=start_line, limit=end_line-start_line+1) call.
 """
 
 import ast
 import pathlib
 import sys
+import tempfile
 import unittest
 
 _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -19,6 +23,8 @@ if str(_ROOT_DIR) not in sys.path:
 
 from retrieval.chunker import chunk_document  # noqa: E402
 from retrieval.index import ContextualRetriever  # noqa: E402
+from retrieval.project_loader import load_chunk_documents  # noqa: E402
+from retrieval.retrievers import LexicalRetriever  # noqa: E402
 
 _CORPUS_DIR = pathlib.Path(__file__).parent / "fixtures"
 _RETRIEVAL_DIR = _ROOT_DIR / "retrieval"
@@ -135,6 +141,40 @@ class TestOfflineAssertion(unittest.TestCase):
         retriever.build(chunks, use_context=True)
         results = retriever.search(_QUERY, top_k=5)
         self.assertEqual(len(results), 5)
+
+
+class TestEndToEndChunkRetrieval(unittest.TestCase):
+    """load_chunk_documents -> LexicalRetriever.index -> search_detailed
+    must surface real, readable file:line spans for a coding agent."""
+
+    def test_index_query_returns_line_spanned_hits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            source = root / "networks.txt"
+            source.write_text(
+                (_CORPUS_DIR / "computer_networks.txt").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            chunk_docs = load_chunk_documents(root)
+            self.assertGreater(len(chunk_docs), 0)
+
+            retriever = LexicalRetriever()
+            retriever.index(chunk_docs)
+            hits = retriever.search_detailed(_QUERY, top_k=1)
+
+            self.assertEqual(len(hits), 1)
+            hit = hits[0]
+            self.assertEqual(hit.source_path, "networks.txt")
+            self.assertGreaterEqual(hit.start_line, 1)
+            self.assertGreaterEqual(hit.end_line, hit.start_line)
+            self.assertEqual(hit.docid, f"networks.txt:{hit.start_line}-{hit.end_line}")
+
+            # The span must actually resolve to real, non-empty source lines
+            # (what a coding agent's Read(path, offset, limit) would return).
+            all_lines = source.read_text(encoding="utf-8").splitlines()
+            spanned = all_lines[hit.start_line - 1 : hit.end_line]
+            self.assertTrue(any(line.strip() for line in spanned))
 
 
 if __name__ == "__main__":

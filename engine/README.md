@@ -1,10 +1,11 @@
 # rag-retrieval
 
-Fully offline contextual RAG retrieval library. Five comparable retrieval
+Fully offline contextual RAG retrieval library. Six comparable retrieval
 strategies — contextual lexical retrieval (TF-IDF + BM25 fused with
 reciprocal-rank fusion), its LLM-enriched `lexical+ctx` variant, turbovec
-(dense ANN over quantized embeddings), pi-serini (Lucene BM25), and hybrid
-(lexical + dense arms fused with RRF) — with a stdlib-only core and graceful
+(dense ANN over quantized embeddings), pi-serini (Lucene BM25), hybrid
+(lexical + dense arms fused with RRF), and tree-sitter (AST-boundary chunking
+with enclosing-scope context) — with a stdlib-only core and graceful
 degradation when optional backends are missing.
 
 This package is the vendored engine of the `agentic-retrieval` Claude Code
@@ -16,7 +17,7 @@ the parent repository: https://github.com/josix/agentic-retrieval
 From a built wheel or sdist:
 
 ```bash
-uv pip install rag_retrieval-0.2.0-py3-none-any.whl
+uv pip install rag_retrieval-0.3.0-py3-none-any.whl
 ```
 
 Directly from GitHub (no local checkout needed), using the `engine/`
@@ -26,8 +27,8 @@ subdirectory of the monorepo:
 uv pip install "rag-retrieval @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
 ```
 
-With optional extras (`remote`, `local`, `turbovec`, `pyserini`, or `all` for
-every retrieval extra in one install):
+With optional extras (`remote`, `local`, `turbovec`, `pyserini`, `treesitter`,
+or `all` for every retrieval extra in one install):
 
 ```bash
 uv pip install "rag-retrieval[all] @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
@@ -41,7 +42,8 @@ uv pip install "rag-retrieval[all] @ git+https://github.com/josix/agentic-retrie
 | `local` | `sentence-transformers` | Local embeddings for dense retrieval |
 | `turbovec` | `turbovec` | TurboQuant-quantized dense ANN retriever |
 | `pyserini` | `pyserini` | Lucene BM25 retriever (needs a Java 21 JDK) |
-| `all` | `rag-retrieval[local,remote,turbovec,pyserini]` | Every retrieval extra above, one-shot install of every strategy |
+| `treesitter` | `tree-sitter`, `tree-sitter-language-pack` | AST-boundary ("cAST") chunking for code corpora |
+| `all` | `rag-retrieval[local,remote,turbovec,pyserini,treesitter]` | Every retrieval extra above, one-shot install of every strategy |
 | `dev` | `ruff`, `isort`, `complexipy` | Dev tooling |
 
 The core install (no extras) has zero required dependencies and always works.
