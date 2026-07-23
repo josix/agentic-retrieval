@@ -74,10 +74,11 @@ retrieval --version
 
 - `index` builds a retriever over `load_documents(root)` and persists it as
   a JSON cache (`lexical.json` + `meta.json`) under
-  `~/.cache/agentic-retrieval/indexes/<project-key>`, where `<project-key>`
-  is a short hash of the root's resolved absolute path — set
-  `RETRIEVAL_INDEX_DIR` to relocate the cache base directory (see the
-  warning below about pointing it inside the indexed project root). If a
+  `<project-root>/.agentic-retrieval` by default — set `RETRIEVAL_INDEX_DIR`
+  to instead relocate it to a shared `<override>/<project-key>` base
+  directory, where `<project-key>` is a short hash of the root's resolved
+  absolute path (see the warning below about pointing it inside the
+  indexed project root). If a
   fresh (non-stale) cache already exists, `index` skips the rebuild and
   prints `index up to date -> <dir>`; pass `--force` to rebuild
   unconditionally.
@@ -94,11 +95,13 @@ retrieval --version
   current working directory, if omitted.
 
 > **Warning**: if `RETRIEVAL_INDEX_DIR` points at a directory *inside* the
-> indexed project root (rather than the default `~/.cache/...` location or
-> some other directory outside the root), the cache's `lexical.json`/
-> `meta.json` get swept up as documents on the next `index`/`query` run —
-> only a directory literally named `.cache` is excluded by default, so this
-> can create a feedback loop. Point it outside the project root instead.
+> indexed project root using a name other than the default's
+> `.agentic-retrieval` (rather than pointing it outside the root, or
+> leaving it unset to use the default in-root location), the cache's
+> `lexical.json`/`meta.json` get swept up as documents on the next
+> `index`/`query` run — only `.agentic-retrieval` is excluded by default,
+> so this can create a feedback loop. Point it outside the project root
+> instead.
 
 Without a console-script install, run the same commands through `uv run` or
 `python -m retrieval` (see the parent repository's `SETUP.md`).

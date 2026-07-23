@@ -118,8 +118,8 @@ extras), `pi-serini` (Lucene BM25; needs the pyserini extra + Java 21),
 `hybrid` (lexical + dense fused with RRF; needs the turbovec extras), and
 `treesitter` (AST-boundary chunks with enclosing-scope context; needs the
 treesitter extra) — each persisted as its own JSON cache slot under
-`~/.cache/agentic-retrieval/indexes`, keyed by the project's resolved
-path (override the cache location with `RETRIEVAL_INDEX_DIR`), so they
+`<project-root>/.agentic-retrieval` by default (override the cache
+location with `RETRIEVAL_INDEX_DIR`), so they
 coexist and never invalidate each other. Indexing is **chunk**-granularity
 (`load_chunk_documents`), so each cache holds one entry per chunk span, not
 per file. One line per strategy is printed

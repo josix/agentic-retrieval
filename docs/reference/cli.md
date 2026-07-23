@@ -63,7 +63,7 @@ lexical: indexed 118 chunks
 turbovec: skipped (turbovec retriever needs the 'turbovec' + 'local' extras:)
 pi-serini: indexed 118 chunks
 hybrid: skipped (turbovec retriever needs the 'turbovec' + 'local' extras:)
--> /home/user/.cache/agentic-retrieval/indexes/<project-key>
+-> /home/user/project/.agentic-retrieval
 ```
 
 The skipped `<reason>` is the first line of the backend's guidance
@@ -146,7 +146,8 @@ directory) per cached retriever. If no cache exists, prints
 
 Run the labeled-query eval harness — recall@k/nDCG@k per retriever vs the
 consolidated fusion, confidence-signal validity, and cold/warm search
-latency — entirely in-memory (no `~/.cache/agentic-retrieval` writes). See
+latency — entirely in-memory (no `<project-root>/.agentic-retrieval`
+writes). See
 [Evaluate retrievers](../how-to/evaluate-retrievers.md) for the query-set
 schema and how to read the metrics.
 

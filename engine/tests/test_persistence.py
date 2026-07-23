@@ -30,7 +30,11 @@ from retrieval.persistence import (  # noqa: E402
     project_key,
     save_index,
 )
-from retrieval.project_loader import load_chunk_documents, load_documents  # noqa: E402
+from retrieval.project_loader import (  # noqa: E402
+    discover_files,
+    load_chunk_documents,
+    load_documents,
+)
 from retrieval.retrievers import (  # noqa: E402
     HybridRetriever,
     LexicalRetriever,
@@ -376,6 +380,31 @@ class TestPersistence(unittest.TestCase):
                 _write(root / "x.txt", "hello")
                 directory = index_dir(root)
                 self.assertTrue(str(directory).startswith(override_dir))
+
+    def test_index_dir_defaults_to_in_project_root_without_override(self) -> None:
+        old_env = os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp) / "project"
+                root.mkdir()
+                self.assertIsNone(cache_base_dir())
+                self.assertEqual(index_dir(root), root.resolve() / ".agentic-retrieval")
+        finally:
+            if old_env is not None:
+                os.environ["RETRIEVAL_INDEX_DIR"] = old_env
+
+    def test_discover_files_excludes_default_cache_dir(self) -> None:
+        """The in-root default cache dir must never feed back into discovery
+        (avoids indexing the cache's own lexical.json/meta.json)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "a.txt", "hello world")
+            _write(root / ".agentic-retrieval" / "lexical.json", "{}")
+            _write(root / ".agentic-retrieval" / "meta.json", "{}")
+
+            found = list(discover_files(root))
+            self.assertTrue(any(p.name == "a.txt" for p in found))
+            self.assertFalse(any(".agentic-retrieval" in p.parts for p in found))
 
 
 if __name__ == "__main__":

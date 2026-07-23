@@ -2,7 +2,7 @@
 
 `retrieval eval` runs a labeled-query benchmark against every retriever
 strategy plus the consolidated fusion, entirely in-memory (no
-`~/.cache/agentic-retrieval` writes) — the same graceful-degradation
+`<project-root>/.agentic-retrieval` writes) — the same graceful-degradation
 convention as `retrieval index`/`query`: a strategy whose optional extras
 are missing is skipped, not a hard failure, as long as the always-available
 `lexical` strategy runs.

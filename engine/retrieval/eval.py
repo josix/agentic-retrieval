@@ -10,7 +10,7 @@ import-time dependency.
 Everything here runs fully in-memory against a labeled query set (see
 ``docs/how-to/evaluate-retrievers.md`` for the JSON schema); no
 ``save_index``/on-disk cache writes happen, so running an eval never touches
-a project's real ``~/.cache/agentic-retrieval`` index.
+a project's real ``<project-root>/.agentic-retrieval`` index.
 """
 
 import json

@@ -93,6 +93,7 @@ DEFAULT_EXCLUDE_DIRS = frozenset(
         ".cache",
         "site-packages",
         ".complexipy_cache",
+        ".agentic-retrieval",
     }
 )
 

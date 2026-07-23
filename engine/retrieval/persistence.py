@@ -3,9 +3,12 @@
 Stdlib-only (``json``, ``hashlib``, ``os``, ``pathlib``, ``time``) — each
 retriever's cache is a pair of JSON files (data + meta, e.g. ``lexical.json``
 + ``meta.json`` for the lexical family, ``hybrid.json`` + ``hybrid.meta.json``
-for hybrid) under a per-project directory derived from the resolved, absolute
-project root path, so different projects (and different checkouts of the same
-repo) never collide — and different retrievers for the same project coexist.
+for hybrid) under a per-project directory. By default that directory is
+``<project-root>/.agentic-retrieval`` (excluded from discovery by name); if
+``RETRIEVAL_INDEX_DIR`` is set, caches instead live under
+``<override>/<project_key>``, derived from the resolved, absolute project
+root path, so different projects (and different checkouts of the same repo)
+never collide — and different retrievers for the same project coexist.
 
 The ``pi-serini`` retriever additionally keeps its binary Lucene segments in
 a ``lucene/`` subdirectory of the same per-project cache dir; its JSON file
@@ -21,10 +24,11 @@ crash mid-write never leaves a half-written cache file for a future
 ``load_index`` to trip over.
 
 Warning: if ``RETRIEVAL_INDEX_DIR`` is pointed *inside* the indexed project
-root, the cache's ``lexical.json``/``meta.json`` get swept up as documents
-on the next index/query run (a feedback loop) — only a directory literally
-named ``.cache`` is excluded by default, so any other cache dirname is
-fair game for re-indexing.
+root using a directory name other than ``.agentic-retrieval``, the cache's
+``lexical.json``/``meta.json`` get swept up as documents on the next
+index/query run (a feedback loop) — only ``.agentic-retrieval`` (the
+in-root default's name) is excluded by default, so any other cache dirname
+is fair game for re-indexing.
 
 Since retrievers now index chunk-granularity Documents (see
 ``retrieval.project_loader.load_chunk_documents``), a meta file's
@@ -52,9 +56,10 @@ from retrieval.retrievers import (
     TurbovecRetriever,
 )
 
-#: Default on-disk location for the index cache; overridable via
-#: ``RETRIEVAL_INDEX_DIR`` (see ``cache_base_dir``).
-DEFAULT_BASE = Path.home() / ".cache" / "agentic-retrieval" / "indexes"
+#: Name of the per-project cache directory created under the project root
+#: by default; also excluded from file discovery (see ``project_loader``)
+#: so it never feeds back into an index/query run.
+CACHE_DIRNAME = ".agentic-retrieval"
 
 _LEXICAL_FILENAME = "lexical.json"
 _META_FILENAME = "meta.json"
@@ -83,16 +88,17 @@ def _layout(retriever_name: str) -> Tuple[str, str, Any]:
         ) from None
 
 
-def cache_base_dir() -> Path:
-    """Return the base directory all project index caches live under.
+def cache_base_dir() -> Optional[Path]:
+    """Return the shared base directory index caches live under, if overridden.
 
-    Honors the ``RETRIEVAL_INDEX_DIR`` environment variable override; falls
-    back to ``DEFAULT_BASE``.
+    Honors the ``RETRIEVAL_INDEX_DIR`` environment variable; returns ``None``
+    when unset, meaning "use the per-project in-root default"
+    (``<project-root>/.agentic-retrieval``) instead of a shared base dir.
     """
     override = os.environ.get("RETRIEVAL_INDEX_DIR")
     if override:
         return Path(override)
-    return DEFAULT_BASE
+    return None
 
 
 def project_key(root: "os.PathLike[str] | str") -> str:
@@ -107,8 +113,16 @@ def project_key(root: "os.PathLike[str] | str") -> str:
 
 
 def index_dir(root: "os.PathLike[str] | str") -> Path:
-    """Return the per-project cache directory for *root* (may not exist yet)."""
-    return cache_base_dir() / project_key(root)
+    """Return the per-project cache directory for *root* (may not exist yet).
+
+    When ``RETRIEVAL_INDEX_DIR`` is set, caches live under
+    ``<override>/<project_key(root)>`` (a shared base dir keyed by hash).
+    Otherwise they live under ``<project-root>/.agentic-retrieval``.
+    """
+    base = cache_base_dir()
+    if base is not None:
+        return base / project_key(root)
+    return Path(root).resolve() / CACHE_DIRNAME
 
 
 def compute_fingerprint(root: "os.PathLike[str] | str", **loader_kw: Any) -> str:

@@ -25,7 +25,7 @@ are not interchangeable:
 - **The `retrieval` CLI persists an on-disk cache.** `retrieval index` /
   `retrieval query` build a `LexicalRetriever` and persist it as a JSON
   cache (`lexical.json` + `meta.json`) under
-  `~/.cache/agentic-retrieval/indexes/<project-key>` (override with
+  `<project-root>/.agentic-retrieval` (override with
   `RETRIEVAL_INDEX_DIR`). This cache survives across invocations —
   `query` loads it instead of rebuilding, auto-reindexing only when the
   project's files have changed. See

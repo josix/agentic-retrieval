@@ -15,7 +15,7 @@ uv run --project engine --extra all retrieval query "..." --root <path-to-projec
 ```
 
 `index` builds and persists a JSON cache under
-`~/.cache/agentic-retrieval/indexes` (override with
+`<project-root>/.agentic-retrieval` (override with
 `RETRIEVAL_INDEX_DIR`); `query` loads it, auto-reindexing if the cache is
 missing or the project's files changed since it was built. `retrieval stats
 --root <path-to-project>` reports on the cache without searching.
@@ -40,9 +40,10 @@ Read(path="src/app.py", offset=42, limit=58 - 42 + 1)
 
 !!! warning
     Don't point `RETRIEVAL_INDEX_DIR` inside the project root being
-    indexed — the cache's `lexical.json`/`meta.json` would get indexed as
-    documents on the next run (only a `.cache`-named directory is excluded
-    by default), creating a feedback loop.
+    indexed using a directory name other than the default's
+    `.agentic-retrieval` — the cache's `lexical.json`/`meta.json` would get
+    indexed as documents on the next run (only `.agentic-retrieval` is
+    excluded by default), creating a feedback loop.
 
 ## Heredoc: in-memory engine API
 
