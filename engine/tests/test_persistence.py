@@ -19,6 +19,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from retrieval.bm25 import BM25Index  # noqa: E402
+from retrieval.document import Document  # noqa: E402
 from retrieval.persistence import (  # noqa: E402
     cache_base_dir,
     cached_retrievers,
@@ -30,7 +31,12 @@ from retrieval.persistence import (  # noqa: E402
     save_index,
 )
 from retrieval.project_loader import load_chunk_documents, load_documents  # noqa: E402
-from retrieval.retrievers import HybridRetriever, LexicalRetriever, TurbovecRetriever  # noqa: E402
+from retrieval.retrievers import (  # noqa: E402
+    HybridRetriever,
+    LexicalRetriever,
+    TreeSitterRetriever,
+    TurbovecRetriever,
+)
 from retrieval.tfidf import TfidfIndex  # noqa: E402
 
 try:
@@ -280,6 +286,38 @@ class TestPersistence(unittest.TestCase):
         # plain lexical load still round-trips it.
         self.assertEqual(list(cached_retrievers(self.root)), ["lexical+ctx"])
         self.assertIsNotNone(load_index(self.root, "lexical"))
+
+    def test_treesitter_round_trip_search_equality_and_context(self) -> None:
+        """TreeSitterRetriever needs no optional extras (only the ast_chunker
+        loader does), so this exercises the cache round-trip with inline
+        Documents carrying a context breadcrumb."""
+        docs = [
+            Document(
+                "d1", "def baz(self):\n    return self.value\n",
+                source_path="pkg/bar.py", start_line=10, end_line=11,
+                context="Bar.baz",
+            ),
+            Document(
+                "d2", "def qux():\n    return 42\n",
+                source_path="pkg/other.py", start_line=1, end_line=2,
+            ),
+        ]
+        retriever = TreeSitterRetriever()
+        retriever.index(docs)
+        data = retriever.to_dict()
+        json.dumps(data)  # must be JSON-safe
+        self.assertEqual(data["units"][0]["context"], "Bar.baz")
+        self.assertEqual(data["units"][1]["context"], "")
+
+        save_index(retriever, self.root, compute_fingerprint(self.root), "treesitter", "0.2.0")
+        loaded = load_index(self.root, "treesitter")
+        self.assertIsNotNone(loaded)
+        restored, _meta = loaded
+        self.assertIsInstance(restored, TreeSitterRetriever)
+        query = "baz self value"
+        self.assertEqual(retriever.search(query, top_k=2), restored.search(query, top_k=2))
+        hit = restored.search_detailed(query, top_k=1)[0]
+        self.assertEqual(hit.context, "Bar.baz")
 
     @unittest.skipUnless(_TURBOVEC_INSTALLED, "turbovec not installed")
     def test_turbovec_round_trip_search_equality(self) -> None:

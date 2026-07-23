@@ -1,12 +1,12 @@
 ---
 name: retrieval
-description: Compare five retrieval strategies — contextual retrieval (TF-IDF/BM25/RRF fusion), its LLM-enriched lexical+ctx variant, turbovec (dense ANN), pi-serini (Lucene BM25), and hybrid (lexical + dense fused with RRF) — with a stdlib-only offline core and graceful degradation when optional backends are missing. Use when the user wants to compare retrieval strategies on their project, search project files, or set up the retrieval engine.
+description: Compare six retrieval strategies — contextual retrieval (TF-IDF/BM25/RRF fusion), its LLM-enriched lexical+ctx variant, turbovec (dense ANN), pi-serini (Lucene BM25), hybrid (lexical + dense fused with RRF), and tree-sitter (AST-boundary chunking with enclosing scope context) — with a stdlib-only offline core and graceful degradation when optional backends are missing. Use when the user wants to compare retrieval strategies on their project, search project files, or set up the retrieval engine.
 trigger: /retrieval
 ---
 
 # /retrieval
 
-Compare five retrieval strategies on the invoking project's own files
+Compare six retrieval strategies on the invoking project's own files
 (docs/code under the project root):
 
 1. **Contextual retrieval** (`lexical`) — TF-IDF + BM25 fused with
@@ -23,6 +23,10 @@ Compare five retrieval strategies on the invoking project's own files
    JDK.
 5. **hybrid** — lexical + dense arms over the same corpus, fused with RRF at
    search time. Needs the same extras as turbovec.
+6. **treesitter** — the same lexical BM25+TF-IDF+RRF ranking over AST-boundary
+   chunks (cAST), carrying an enclosing function/class breadcrumb on each hit.
+   Needs the `treesitter` extra (only for chunking; ranking itself is
+   zero-dependency).
 
 The default `lexical` retriever runs fully offline with zero required
 dependencies. Every optional strategy degrades gracefully — a missing
@@ -37,9 +41,13 @@ backend is skipped with a note, never a hard failure.
 ```
 
 `index` with no `--retriever` builds every strategy's cache in one pass
-(lexical always; turbovec/pi-serini/hybrid when their extras are present,
-else skipped with a note — never a hard failure). `query` then lets the
-coding agent pick `--retriever` per question — see "Agent routing" below.
+(lexical always; turbovec/pi-serini/hybrid/treesitter when their extras are present,
+else skipped with a note — never a hard failure). `query` with no
+`--retriever` (the default, alias `--retriever all`) **consolidates every
+available strategy into a single deduplicated, ranked, explainable list** —
+a handoff a following conversation/agent can act on directly. Pass
+`--retriever <name>` to query one strategy instead — see "Agent routing"
+below for when a single strategy is still the right call.
 
 ## What You Must Do When Invoked
 
@@ -106,9 +114,10 @@ uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all \
 `index` with no `--retriever` (the default, equivalent to `--retriever all`)
 builds every default strategy — `lexical` (TF-IDF + BM25 fused with RRF, the
 zero-dependency baseline), `turbovec` (dense ANN; needs the turbovec + local
-extras), `pi-serini` (Lucene BM25; needs the pyserini extra + Java 21), and
-`hybrid` (lexical + dense fused with RRF; needs the turbovec extras) — each
-persisted as its own JSON cache slot under
+extras), `pi-serini` (Lucene BM25; needs the pyserini extra + Java 21),
+`hybrid` (lexical + dense fused with RRF; needs the turbovec extras), and
+`treesitter` (AST-boundary chunks with enclosing-scope context; needs the
+treesitter extra) — each persisted as its own JSON cache slot under
 `~/.cache/agentic-retrieval/indexes`, keyed by the project's resolved
 path (override the cache location with `RETRIEVAL_INDEX_DIR`), so they
 coexist and never invalidate each other. Indexing is **chunk**-granularity
@@ -117,7 +126,7 @@ per file. One line per strategy is printed
 (`lexical: indexed N chunks`, etc.); any strategy whose extras are missing
 prints `<name>: skipped (<reason>)` and the run still exits 0, since the
 always-available `lexical` strategy succeeding is what matters for the
-default run. Pass `--retriever lexical|turbovec|pi-serini|hybrid` to build
+default run. Pass `--retriever lexical|turbovec|pi-serini|hybrid|treesitter` to build
 just one strategy instead — in that single-strategy form a missing extra
 **hard-fails** with a guidance `RuntimeError` (exit 1) naming the install
 command, instead of being skipped; fall back to `--retriever lexical` in
@@ -138,10 +147,37 @@ missing extra, exit 1 — `query` never silently falls back); pass
 location, chunk count, file count, creation time, and staleness without
 searching.
 
-### Agent routing — which retriever to query per question
+### `query`'s default is consolidated (all strategies, one ranked list)
 
-After a default `index` run populates every available cache slot, choose
-`--retriever` per query based on the question's shape:
+`query` with **no `--retriever` flag** (equivalent to `--retriever all`)
+loads every available strategy's cache, searches each, and merges/fuses them
+into one deduplicated, ranked, explainable list via
+`retrieval.consolidation.consolidate` — same-file overlapping/adjacent spans
+across retrievers (e.g. a `lexical` line-chunk and a `treesitter` AST-chunk
+over the same function) merge into a single candidate. This is almost always
+what you want by default: it removes the need to pick one `--retriever` up
+front and surfaces cross-retriever agreement as a relevance signal. Text mode
+prints one line per result — `path:start-end  [score=... agree=n/m
+conf=high|medium|low  via a,b,c]  context` (first token stays `path:start-end`
+so the `Read` affordance survives); `--json` emits `{"query", "mode":
+"consolidated", "retrievers": [...], "skipped": [{"name", "reason"}, ...],
+"results": [{"docid", "path", "start_line", "end_line", "rank", "context",
+"score", "provenance", "agreement", "confidence", "contributors"}, ...]}`.
+Pass `--output PATH` to also persist that same JSON envelope to disk (a
+persistable handoff for a following conversation/agent), and
+`--weights "name:w,..."` to bias specific retrievers in the fusion. A missing
+backend is skipped (noted on stderr in text mode, in `"skipped"` in JSON),
+never a hard failure, as long as the always-available `lexical` strategy
+consolidates successfully (exit 0); exit 1 only if even `lexical` is
+unusable. Full detail: `docs/how-to/consolidated-query.md`.
+
+### Agent routing — when to query a single retriever instead
+
+Pass `--retriever <name>` to skip consolidation and query exactly one
+strategy — its output is byte-identical to the pre-consolidation CLI (plain
+`path:start-end` lines, or the `{"query", "results": [...]}` JSON shape with
+no `score`/`provenance` fields). Prefer this when you already know which
+method fits the question's shape:
 
 | Query characteristic | Query with |
 | --- | --- |
@@ -149,6 +185,7 @@ After a default `index` run populates every available cache slot, choose
 | Paraphrase / synonyms / wording differs from documents | `--retriever turbovec` |
 | Lucene-grade BM25 depth/scale needed | `--retriever pi-serini` |
 | Uncertain — vocabulary mismatch vs genuine irrelevance | `--retriever hybrid` |
+| Code/script; want AST-boundary spans + enclosing scope | `--retriever treesitter` |
 | Chosen backend skipped/errored | fall back to `--retriever lexical` |
 
 See `hybrid-retrieval-usage` for the full decision walkthrough.
@@ -258,20 +295,23 @@ PY
 
 ## Engine API — retrievers
 
-The five retrieval methods are implemented as classes in
+The six retrieval methods are implemented as classes in
 `engine/retrieval/retrievers.py`, all built over the shared
 `engine/retrieval/document.py::Document` record
 (`docid: str`, `text: str`, `url: str = ""`, `source_path: str = ""`,
-`start_line: Optional[int] = None`, `end_line: Optional[int] = None`).
+`start_line: Optional[int] = None`, `end_line: Optional[int] = None`,
+`context: str = ""`).
 `load_chunk_documents(root)` (`engine/retrieval/project_loader.py`) is the
 production loader: it chunks every discovered file and returns one
 chunk-granularity `Document` per span, `docid` formatted `"{path}:{start}-
 {end}"`. Every retriever's `search_detailed(query, top_k) -> List[SearchHit]`
 resolves each ranked result's span **from that Document metadata**, never by
 parsing the docid string — a `SearchHit` carries `docid`, `source_path`,
-`start_line`, `end_line`, `rank`, so a coding agent can turn a hit straight
-into `Read(hit.source_path, offset=hit.start_line, limit=hit.end_line -
-hit.start_line + 1)`. `search(query, top_k) -> List[str]` remains as a thin
+`start_line`, `end_line`, `rank`, `context` (an optional enclosing
+function/class breadcrumb, populated by the tree-sitter retriever), so a
+coding agent can turn a hit straight into `Read(hit.source_path,
+offset=hit.start_line, limit=hit.end_line - hit.start_line + 1)`.
+`search(query, top_k) -> List[str]` remains as a thin
 docid-only projection of `search_detailed` for backward compatibility. Select
 a class either directly or via `retrieval.retrievers.REGISTRY` /
 `build_retriever(name)`.
@@ -283,6 +323,7 @@ a class either directly or via `retrieval.retrievers.REGISTRY` /
 | turbovec (dense ANN) | `TurbovecRetriever` | `turbovec` | `[turbovec,local]` | No — `RuntimeError` if uninstalled |
 | pi-serini (Lucene BM25) | `PiSeriniRetriever` | `pi-serini` | `[pyserini]` | No — `RuntimeError` if uninstalled or Java missing |
 | hybrid (lexical + dense RRF fusion) | `HybridRetriever` | `hybrid` | `[turbovec,local]` | No — `RuntimeError` if uninstalled |
+| tree-sitter (AST-boundary chunks + scope context) | `TreeSitterRetriever` | `treesitter` | `[treesitter]` (chunking only) | Yes for ranking; chunking needs `[treesitter]` or falls back |
 
 ```python
 from retrieval.retrievers import build_retriever
@@ -306,6 +347,11 @@ print(r.search("what carries data between networks", top_k=5))
   `RuntimeError` with install instructions when their optional dependency is
   missing — catch this and fall back to `LexicalRetriever` rather than
   aborting.
+- `load_ast_chunk_documents()` (feeding `TreeSitterRetriever`) raises the
+  same style of `RuntimeError` when the treesitter extra is missing;
+  `TreeSitterRetriever.index()` itself never does (it needs no optional
+  dependency) — catch the loader's error and fall back to
+  `load_chunk_documents()` + `LexicalRetriever`.
 - The `lexical` retriever always runs — it is the zero-dependency baseline
   every other strategy is compared against.
 - `retrieval index` (default, all-strategy mode) degrades gracefully: a
@@ -340,4 +386,5 @@ snippets, graceful degradation) and for combining methods, see:
 - `lexical-retrieval-usage` — contextual lexical retrieval (TF-IDF + BM25 + RRF)
 - `dense-retrieval-usage` — turbovec dense ANN retrieval
 - `lucene-retrieval-usage` — pi-serini Lucene BM25 retrieval
+- `code-retrieval-usage` — tree-sitter AST-boundary chunking for code corpora
 - `hybrid-retrieval-usage` — fusing methods and choosing between them

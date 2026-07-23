@@ -13,8 +13,11 @@ retrieval index [--root ROOT] [--retriever all|lexical|lexical+ctx|turbovec|pi-s
                 [--force]
                 # --retriever defaults to "all"
 
-retrieval query QUERY [--root ROOT] [--retriever lexical|lexical+ctx|turbovec|pi-serini|hybrid]
+retrieval query QUERY [--root ROOT]
+                       [--retriever all|lexical|lexical+ctx|turbovec|pi-serini|hybrid|treesitter]
                        [--top-k N] [--json] [--stale-ok]
+                       [--weights "name:w,..."] [--output PATH]
+                       # --retriever defaults to "all" (consolidated mode)
 
 retrieval stats [--root ROOT]
 ```
@@ -88,21 +91,38 @@ Search the persisted index for a project root.
 | --- | --- | --- |
 | `query` (positional) | — | Query text (required) |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to search |
-| `--retriever {lexical,lexical+ctx,turbovec,pi-serini,hybrid}` | `lexical` | Retriever to use if the index needs (re)building |
+| `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid,treesitter}` | **`all`** | `all` (default) consolidates every available strategy; a single name queries just that strategy |
 | `--top-k N` | `5` | Number of results |
-| `--json` | off | Emit `{"query": ..., "results": [{"docid", "path", "start_line", "end_line", "rank"}, ...]}` instead of one `path:start-end` span per line |
+| `--json` | off | Emit JSON instead of plain text (shape depends on `--retriever`; see "Output formats" below) |
 | `--stale-ok` | off | Search the cached index even if it's stale, instead of auto-reindexing |
+| `--weights "name:w,..."` | none | Consolidated mode only: per-retriever RRF weight override (unlisted retrievers default to `1.0`) |
+| `--output PATH` | none | Consolidated mode only: also write the JSON envelope to `PATH` |
 
-If the cache is missing, or present but stale (and `--stale-ok` is not
-passed), `query` auto-reindexes (equivalent to a single-strategy `index`)
-before searching. Which `--retriever` to query is entirely the caller's
-choice — after a default `index all` run has populated every available
-cache slot, the coding agent decides per question (exact tokens ->
-`lexical`, paraphrase/synonyms -> `turbovec`, Lucene-grade BM25 ->
-`pi-serini`, uncertain -> `hybrid`; see `docs/how-to/hybrid-fusion.md`).
-`query` never silently falls back to a different retriever: if the chosen
-backend's extras are missing, it hard-fails with exit code 1 and a guidance
-message on stderr, same as single-strategy `index` — retry with
+### Default (`all`) — consolidated, deduplicated, explainable ranking
+
+With no `--retriever` (or the explicit `--retriever all` alias), `query`
+loads (auto-reindexing as needed) every strategy in `lexical`, `turbovec`,
+`pi-serini`, `hybrid`, `treesitter`, searches each, and merges/fuses the
+results with `retrieval.consolidation.consolidate` into a single
+deduplicated, ranked list — see [Consolidated
+query](../how-to/consolidated-query.md) for the full output format and the
+span-merge/weighted-RRF mechanics. A missing backend's extras are skipped
+(reported on stderr in text mode, in the JSON envelope's `"skipped"` list
+otherwise) — never a hard failure, as long as `lexical` consolidates
+successfully (exit 0); exit 1 only if even `lexical` is unusable.
+
+### Single strategy (`--retriever <name>`)
+
+Pass an explicit `--retriever lexical|lexical+ctx|turbovec|pi-serini|hybrid|treesitter`
+to query just one strategy, unchanged from the pre-consolidation CLI: if the
+cache is missing, or present but stale (and `--stale-ok` is not passed),
+`query` auto-reindexes (equivalent to a single-strategy `index`) before
+searching. Pick `--retriever` per question (exact tokens -> `lexical`,
+paraphrase/synonyms -> `turbovec`, Lucene-grade BM25 -> `pi-serini`,
+uncertain -> `hybrid`, AST-boundary code spans -> `treesitter`; see
+`docs/how-to/hybrid-fusion.md`). This form never silently falls back to a
+different retriever: if the chosen backend's extras are missing, it
+hard-fails with exit code 1 and a guidance message on stderr — retry with
 `--retriever lexical` explicitly if you want that fallback.
 
 ## `stats`
@@ -123,21 +143,35 @@ directory) per cached retriever. If no cache exists, prints
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success. Also returned by a default (`all`) `index` run even when one or more optional strategies were skipped for missing extras, as long as `lexical` itself built. |
-| `1` | A handled runtime error (e.g. an exception raised inside a subcommand) — the message is printed to stderr as `error: <exc>`. This includes single-strategy `index --retriever <name>` and `query --retriever <name>` when that strategy's extras are missing (no graceful skip in single-strategy form), and a default `index` run whose `lexical` strategy itself fails to build. |
+| `0` | Success. Also returned by a default (`all`) `index` run, and a default (`all`) `query` run, even when one or more optional strategies were skipped for missing extras, as long as `lexical` itself built/consolidated. |
+| `1` | A handled runtime error (e.g. an exception raised inside a subcommand) — the message is printed to stderr as `error: <exc>`. This includes single-strategy `index --retriever <name>` and `query --retriever <name>` when that strategy's extras are missing (no graceful skip in single-strategy form), a default `index` run whose `lexical` strategy itself fails to build, and a default (`all`) `query` run where even `lexical` couldn't be consolidated. |
 | `2` | Argument-parsing error (missing/invalid flags, unknown subcommand) — raised by `argparse` itself via `SystemExit`, before the CLI's own error handling runs |
 
 ## Output formats
 
 - `index`: a single status line to stdout (fast-path or rebuilt message).
-- `query` (default): one `source_path:start_line-end_line` span per line,
-  best match first, no scores. Feed a span straight to
-  `Read(path, offset=start_line, limit=end_line-start_line+1)`.
-- `query --json`: a single JSON object, `{"query": "<text>", "results":
-  [{"docid": "<path:start-end>", "path": "<source_path>", "start_line":
-  <int>, "end_line": <int>, "rank": <int>}, ...]}`. **Breaking change from
+- `query` (default, consolidated `all` mode): one
+  `source_path:start_line-end_line  [score=... agree=n/m conf=...  via
+  a,b,c]  context` line per result, best match first (skip notes go to
+  stderr). The first token stays `path:start-end`, so it still feeds
+  straight into `Read(path, offset=start_line,
+  limit=end_line-start_line+1)`.
+- `query --retriever <name>` (single strategy): one
+  `source_path:start_line-end_line` span per line, best match first, no
+  scores — unchanged from before consolidated mode existed.
+- `query --json` (default, consolidated `all` mode): `{"query": "<text>",
+  "mode": "consolidated", "retrievers": [...], "skipped": [{"name",
+  "reason"}, ...], "results": [{"docid", "path", "start_line", "end_line",
+  "rank", "context", "score", "provenance", "agreement", "confidence",
+  "contributors"}, ...]}`.
+- `query --retriever <name> --json` (single strategy): `{"query": "<text>",
+  "results": [{"docid": "<path:start-end>", "path": "<source_path>",
+  "start_line": <int>, "end_line": <int>, "rank": <int>, "context": "<str>"}, ...]}` —
+  unchanged from before consolidated mode existed. **Breaking change from
   0.2.0**: `results` used to be a flat list of docid strings; it is now a
   list of objects — see [changelog](../changelog.md).
+- `query --output PATH` (consolidated mode only): also writes the
+  `--json` envelope to `PATH`.
 - `stats`: a fixed set of `key: value` lines to stdout.
 
 ## `--root` resolution order
@@ -147,6 +181,7 @@ directory, if neither is given.
 
 ## Next steps
 
+- [Consolidated query (the default)](../how-to/consolidated-query.md)
 - [Persistence and cache](persistence-and-cache.md)
 - [Environment variables](environment-variables.md)
 - [Index and query how-to](../how-to/index-and-query.md)

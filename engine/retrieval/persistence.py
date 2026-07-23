@@ -48,6 +48,7 @@ from retrieval.retrievers import (
     LexicalRetriever,
     PiSeriniRetriever,
     Retriever,
+    TreeSitterRetriever,
     TurbovecRetriever,
 )
 
@@ -69,6 +70,7 @@ _CACHE_LAYOUT = {
     "turbovec": ("turbovec.json", "turbovec.meta.json", TurbovecRetriever),
     "pi-serini": ("pi-serini.json", "pi-serini.meta.json", PiSeriniRetriever),
     "hybrid": ("hybrid.json", "hybrid.meta.json", HybridRetriever),
+    "treesitter": ("treesitter.json", "treesitter.meta.json", TreeSitterRetriever),
 }
 
 

@@ -10,6 +10,11 @@ operate at document granularity.
 document-level retrievers without losing the file:line span a coding agent
 needs to ``Read`` the exact content. Whole-file callers leave the span
 fields at their defaults, preserving backward compatibility.
+
+``context`` is an optional breadcrumb (e.g. ``"Bar.baz"`` for a method
+``baz`` nested in class ``Bar``) set by AST-boundary chunking (see
+``retrieval.ast_chunker``); it defaults to ``""`` for every other loader,
+preserving backward-compatible positional construction.
 """
 
 from dataclasses import dataclass
@@ -24,6 +29,7 @@ class Document:
     source_path: str = ""
     start_line: Optional[int] = None
     end_line: Optional[int] = None
+    context: str = ""
 
 
 @dataclass
@@ -35,3 +41,4 @@ class SearchHit:
     start_line: Optional[int]
     end_line: Optional[int]
     rank: int
+    context: str = ""

@@ -47,11 +47,16 @@ dense, or hybrid — ever ranks it.
 | Sparse retrieval keeps missing a document because it lacks the query's words, but standing up dense/Lucene isn't worth it | Add contextualization at index time (`retrieval.contextualizer` for free, `retrieval.llm_contextualizer` for a paid LLM call) instead of switching retrievers |
 | Any optional backend (`turbovec`, `pi-serini`, or LLM contextualizer) raises `RuntimeError` | Fall back to plain `lexical` — it is the only method with no optional dependency |
 
-`retrieval index` (default, no `--retriever`) builds all four cache slots in
-one pass — lexical, turbovec, pi-serini, and hybrid — so the coding agent can
-query whichever method fits each question via `retrieval query --retriever
-<name>` without a separate index run per method. If the retriever a query
-picks turns out to be missing/skipped, fall back to `--retriever lexical`.
+`retrieval index` (default, no `--retriever`) builds all five cache slots in
+one pass — lexical, turbovec, pi-serini, hybrid, and treesitter — so the
+coding agent can query whichever method fits each question via `retrieval
+query --retriever <name>` without a separate index run per method. If the
+retriever a query picks turns out to be missing/skipped, fall back to
+`--retriever lexical`. `retrieval query` **with no `--retriever` flag**
+(default, alias `--retriever all`) skips this per-method choice entirely: it
+consolidates every available strategy's ranking into one deduplicated,
+explainable list in a single call — see "Consolidating more than two
+rankings" below and `docs/how-to/consolidated-query.md`.
 
 ## Setup
 
@@ -127,6 +132,31 @@ outward and re-query with the vocabulary a hit reveals; if the top spans
 look noisy, re-query, switch retriever, or raise `--top-k` (see the
 `retrieval` skill's Step 3).
 
+## Consolidating more than two rankings
+
+The manual `reciprocal_rank_fusion` recipe above works for two arms and
+requires you to remap docids into a shared integer space yourself. For three
+or more arms — or whenever you want span-aware deduplication (a `lexical`
+line-chunk and a `treesitter` AST-chunk over the same function should count
+as *one* candidate, not two), plus provenance/agreement/confidence baked into
+the result — use `retrieval.consolidation.consolidate` instead:
+
+```python
+from retrieval.consolidation import consolidate
+
+per_retriever_hits = {
+    "lexical": lexical.search_detailed(query, top_k=15),
+    "turbovec": dense.search_detailed(query, top_k=15),
+    "treesitter": treesitter.search_detailed(query, top_k=15),
+}
+ranked = consolidate(per_retriever_hits)  # List[ConsolidatedHit], best first
+```
+
+This is exactly what `retrieval query` (no `--retriever`, or `--retriever
+all`) does under the hood — see `docs/how-to/consolidated-query.md` for the
+CLI form (including `--weights` and `--output`) and
+`docs/reference/api/consolidation.md` for the full API.
+
 ## Provider selection (experimental)
 
 `retrieval/providers.py::get_contextualizer()` picks a contextualizer via the
@@ -189,3 +219,6 @@ Fix: re-run `UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agen
   baseline every hybrid fusion includes)
 - `dense-retrieval-usage` — turbovec dense ANN retrieval
 - `lucene-retrieval-usage` — pi-serini Lucene BM25 retrieval
+- `code-retrieval-usage` — tree-sitter AST-boundary chunking for code corpora
+- `docs/how-to/consolidated-query.md` — the default `retrieval query`
+  consolidated-ranking mode (`retrieval.consolidation.consolidate`)

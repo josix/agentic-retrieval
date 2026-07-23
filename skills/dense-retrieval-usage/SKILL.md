@@ -135,5 +135,6 @@ succeeds; it raises `RuntimeError("call index() before search()")`.
 - `lexical-retrieval-usage` — contextual lexical retrieval (zero-dep baseline
   and fallback)
 - `lucene-retrieval-usage` — pi-serini Lucene BM25 retrieval
+- `code-retrieval-usage` — tree-sitter AST-boundary chunking for code corpora
 - `hybrid-retrieval-usage` — fusing dense with lexical, and the
   method-selection decision table

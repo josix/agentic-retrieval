@@ -1,10 +1,13 @@
 # Hybrid fusion
 
-`retrieval/fusion.py::reciprocal_rank_fusion(rankings, k=60)` fuses two or
-more ranked lists (lists of **integer indices**, best first) by
-`sum(1 / (k + rank + 1))` across every list a candidate appears in. Raise
-`k` to flatten the influence of rank position; lower it to weight top ranks
-more heavily.
+`retrieval/fusion.py::reciprocal_rank_fusion(rankings, k=60, weights=None)`
+fuses two or more ranked lists (lists of **integer indices**, best first) by
+`sum(weight_i / (k + rank + 1))` across every list a candidate appears in.
+Raise `k` to flatten the influence of rank position; lower it to weight top
+ranks more heavily. `weights` is an optional, same-length list of per-ranking
+multipliers — `None` (the default) weights every ranking `1.0`, which is
+numerically identical to the unweighted fusion every existing caller already
+relies on.
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
@@ -63,7 +66,22 @@ PY
 
 Full detail: `skills/hybrid-retrieval-usage/SKILL.md`.
 
+## Consolidating more than two rankings
+
+`reciprocal_rank_fusion` above requires remapping every ranking's docids into
+a shared integer space by hand, and treats two overlapping-but-not-identical
+spans (e.g. a `lexical` line-chunk and a `treesitter` AST-chunk over the same
+function) as unrelated candidates. `retrieval.consolidation.consolidate`
+wraps the same weighted RRF with span-aware deduplication across any number
+of retrievers, and returns a ranked list that already carries provenance,
+agreement, and a confidence label — this is what `retrieval query` (the
+default, or `--retriever all`) runs under the hood. See
+[Consolidated query](consolidated-query.md) and the [consolidation
+API](../reference/api/consolidation.md).
+
 ## Next steps
 
+- [Consolidated query (the default)](consolidated-query.md)
 - [Retrieval strategies compared](../concepts/retrieval-strategies.md)
 - [Reference: fusion API](../reference/api/fusion.md)
+- [Reference: consolidation API](../reference/api/consolidation.md)

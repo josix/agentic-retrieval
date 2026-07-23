@@ -66,15 +66,19 @@ uv run --project engine --extra all retrieval query \
   "what carries data between networks" --root "$PROJECT_ROOT" --top-k 5
 ```
 
-`query` loads the cache for whichever `--retriever` you pick (default
-`lexical`) and searches it, printing one docid per line (best match first,
-no scores). If that strategy's cache is missing, or the project's files
-changed since it was built (detected by a content fingerprint), `query`
-auto-reindexes just that strategy first. Since a default `index` run already
-populated every available slot, pick `--retriever` per question — exact
-keywords -> `lexical`, paraphrase/synonyms -> `turbovec`, Lucene-grade BM25
--> `pi-serini`, uncertain -> `hybrid` — and fall back to `--retriever
-lexical` if the chosen backend was skipped or errors. See
+With no `--retriever` flag (the default, alias `--retriever all`), `query`
+loads every available strategy's cache and **consolidates** their rankings
+into a single deduplicated, ranked, explainable list (see
+[Consolidated query](consolidated-query.md)) instead of picking just one.
+Pass `--retriever <name>` (`lexical`, `turbovec`, `pi-serini`, `hybrid`,
+`treesitter`) to query a single strategy instead — output stays one
+`path:start-end` span per line (best match first, no scores). If that
+strategy's cache is missing, or the project's files changed since it was
+built (detected by a content fingerprint), `query` auto-reindexes just that
+strategy first. Pick `--retriever` per question when you want a single
+method — exact keywords -> `lexical`, paraphrase/synonyms -> `turbovec`,
+Lucene-grade BM25 -> `pi-serini`, uncertain -> `hybrid` — and fall back to
+`--retriever lexical` if the chosen backend was skipped or errors. See
 [hybrid fusion](hybrid-fusion.md) for the full routing rationale.
 
 Pass `--stale-ok` to search the existing (possibly stale) cache anyway,
@@ -137,6 +141,7 @@ they're there: `lexical-retrieval-usage`, `dense-retrieval-usage`,
 
 - [Full CLI reference](../reference/cli.md) — every flag, exit code, and
   output format.
+- [Consolidated query (the default)](consolidated-query.md)
 - [Persistence and cache](../reference/persistence-and-cache.md) — how the
   fingerprint and cache directory scheme work.
 - [Use each retriever](use-each-retriever.md)

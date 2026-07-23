@@ -18,7 +18,7 @@ metadata — never by parsing spans back out of a docid string — and
 build a ``SearchHit``. ``search()`` is a thin wrapper: ``[h.docid for h in
 search_detailed(...)]``, kept for backward-compatible callers.
 
-Four backends:
+Six backends:
 
   * ``LexicalRetriever``  — the project's own BM25 + TF-IDF + RRF, run at the
     document level.  Pure stdlib; always available.
@@ -30,6 +30,12 @@ Four backends:
     ``pyserini`` extra and Java 21.
   * ``HybridRetriever``   — lexical + dense arms indexed together, fused with
     RRF at search time.  Needs whatever ``TurbovecRetriever`` needs.
+  * ``TreeSitterRetriever`` — the same lexical (BM25+TF-IDF+RRF) ranking over
+    AST-boundary chunks (see ``retrieval.ast_chunker``), enriched with a
+    breadcrumb ``context`` (enclosing function/class) prefixed into the
+    ranked text and carried onto each hit.  Tree-sitter is only needed at
+    chunking time (in ``retrieval.project_loader.load_ast_chunk_documents``),
+    so the retriever itself has no optional deps.
 
 Optional backends follow the project's stub convention (see
 ``retrieval/providers.py``): construction may succeed, but the missing
@@ -55,6 +61,7 @@ def _units_from_documents(documents: List[Document]) -> List[Dict[str, Any]]:
             "source_path": d.source_path,
             "start_line": d.start_line,
             "end_line": d.end_line,
+            "context": d.context,
         }
         for d in documents
     ]
@@ -69,6 +76,7 @@ def _hits_from_units(units: List[Dict[str, Any]], ranked_idx: List[int]) -> List
             start_line=units[idx]["start_line"],
             end_line=units[idx]["end_line"],
             rank=rank,
+            context=units[idx].get("context", ""),
         )
         for rank, idx in enumerate(ranked_idx)
     ]
@@ -191,6 +199,37 @@ class ContextualLexicalRetriever(LexicalRetriever):
                 source_path=d.source_path,
                 start_line=d.start_line,
                 end_line=d.end_line,
+            )
+            for d in documents
+        ]
+        super().index(enriched)
+
+
+class TreeSitterRetriever(LexicalRetriever):
+    """LexicalRetriever over AST-boundary ("cAST") chunked documents.
+
+    Expects documents chunk-granularity via
+    ``retrieval.project_loader.load_ast_chunk_documents``, each optionally
+    carrying a ``context`` breadcrumb (enclosing function/class path, e.g.
+    ``"Bar.baz"``). Before indexing, each document's breadcrumb is prefixed
+    into its ranked text (so a query for "Bar baz" can match a chunk purely
+    via its enclosing-scope name), then ranked with the same TF-IDF + BM25 +
+    RRF as ``LexicalRetriever``. Tree-sitter itself is only needed at
+    chunking time, not here, so this retriever has zero optional deps.
+    """
+
+    name = "tree-sitter (ast chunks)"
+
+    def index(self, documents: List[Document]) -> None:
+        enriched = [
+            Document(
+                docid=d.docid,
+                text=f"{d.context}\n{d.text}".strip() if d.context else d.text,
+                url=d.url,
+                source_path=d.source_path,
+                start_line=d.start_line,
+                end_line=d.end_line,
+                context=d.context,
             )
             for d in documents
         ]
@@ -550,6 +589,7 @@ REGISTRY = {
     "turbovec": TurbovecRetriever,
     "pi-serini": PiSeriniRetriever,
     "hybrid": HybridRetriever,
+    "treesitter": TreeSitterRetriever,
 }
 
 

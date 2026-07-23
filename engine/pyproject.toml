@@ -32,8 +32,15 @@ remote = ["anthropic", "voyageai", "cohere", "httpx", "requests"]
 turbovec = ["turbovec"]
 # Pi-Serini comparison retriever (Lucene BM25 via Pyserini; needs Java 21)
 pyserini = ["pyserini"]
-# Every optional retrieval extra in one install (local + remote + turbovec + pyserini)
-all = ["rag-retrieval[local,remote,turbovec,pyserini]"]
+# Tree-sitter AST-boundary chunking (structural/code retriever)
+# tree-sitter is capped below 0.26: 0.26.0 has a native memory-corruption
+# regression that segfaults (SIGSEGV) deterministically when chunk_code()
+# parses several real source files sequentially in one process — bisected
+# to tree-sitter itself (0.24.0-0.25.2 are all clean; tree-sitter-language-
+# pack version is not implicated). See retrieval/ast_chunker.py::chunk_code.
+treesitter = ["tree-sitter>=0.24,<0.26", "tree-sitter-language-pack"]
+# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter)
+all = ["rag-retrieval[local,remote,turbovec,pyserini,treesitter]"]
 # Dev tooling
 dev = ["ruff", "isort", "complexipy"]
 

@@ -135,5 +135,6 @@ found). Do not call `.search()` before `.index()` succeeds; it raises
 - `lexical-retrieval-usage` — contextual lexical retrieval (zero-dep baseline
   and fallback)
 - `dense-retrieval-usage` — turbovec dense ANN retrieval
+- `code-retrieval-usage` — tree-sitter AST-boundary chunking for code corpora
 - `hybrid-retrieval-usage` — fusing Lucene BM25 with dense rankings, and the
   method-selection decision table

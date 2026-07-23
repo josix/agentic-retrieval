@@ -61,6 +61,7 @@ hit.start_line + 1)`.
 | `turbovec` | `TurbovecRetriever` | No — `RuntimeError` if `turbovec`/`local` extras missing |
 | `pi-serini` | `PiSeriniRetriever` | No — `RuntimeError` if `pyserini` extra or Java 21 missing |
 | `hybrid` | `HybridRetriever` | No — lexical + dense arms fused with RRF; `RuntimeError` if `turbovec`/`local` extras missing |
+| `treesitter` | `TreeSitterRetriever` | Yes for ranking (zero dependencies); `load_ast_chunk_documents()` raises `RuntimeError` if the `treesitter` extra is missing |
 
 ## `build_retriever`
 

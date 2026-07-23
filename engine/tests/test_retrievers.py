@@ -12,6 +12,7 @@ from retrieval.retrievers import (
     ContextualLexicalRetriever,
     HybridRetriever,
     LexicalRetriever,
+    TreeSitterRetriever,
     build_retriever,
 )
 
@@ -198,6 +199,65 @@ class TestHybridRetriever(unittest.TestCase):
             [h.docid for h in hits],
             r.search("what carries data between networks", top_k=4),
         )
+
+
+class TestTreeSitterRetriever(unittest.TestCase):
+    """LexicalRetriever over AST-chunk Documents; no tree-sitter needed here —
+    span/context metadata is fed in directly via inline Documents."""
+
+    def _code_documents(self):
+        return [
+            Document(
+                "d1", "def baz(self):\n    return self.value * 2\n",
+                source_path="pkg/bar.py", start_line=10, end_line=11,
+                context="Bar.baz",
+            ),
+            Document(
+                "d2", "def qux():\n    return 42\n",
+                source_path="pkg/other.py", start_line=1, end_line=2,
+                context="",
+            ),
+        ]
+
+    def test_registered_and_selectable(self) -> None:
+        self.assertIn("treesitter", REGISTRY)
+        self.assertIs(REGISTRY["treesitter"], TreeSitterRetriever)
+        self.assertIsInstance(build_retriever("treesitter"), TreeSitterRetriever)
+
+    def test_ranks_relevant_chunk_first(self) -> None:
+        documents = self._code_documents()
+        r = TreeSitterRetriever()
+        r.index(documents)
+        self.assertEqual(r.search("baz self value", top_k=1)[0], "d1")
+
+    def test_search_detailed_returns_spans_and_context(self) -> None:
+        documents = self._code_documents()
+        r = TreeSitterRetriever()
+        r.index(documents)
+        hits = r.search_detailed("baz self value", top_k=1)
+        self.assertEqual(len(hits), 1)
+        hit = hits[0]
+        self.assertEqual(hit.docid, "d1")
+        self.assertEqual(hit.source_path, "pkg/bar.py")
+        self.assertEqual(hit.start_line, 10)
+        self.assertEqual(hit.end_line, 11)
+        self.assertEqual(hit.context, "Bar.baz")
+
+    def test_breadcrumb_is_searchable(self) -> None:
+        """A query that only matches the breadcrumb (not the chunk body)
+        must still surface the chunk, proving context was indexed."""
+        documents = self._code_documents()
+        r = TreeSitterRetriever()
+        r.index(documents)
+        self.assertEqual(r.search("Bar baz", top_k=1)[0], "d1")
+
+    def test_empty_context_leaves_hit_context_blank(self) -> None:
+        documents = self._code_documents()
+        r = TreeSitterRetriever()
+        r.index(documents)
+        hits = r.search_detailed("qux 42", top_k=1)
+        self.assertEqual(hits[0].docid, "d2")
+        self.assertEqual(hits[0].context, "")
 
 
 if __name__ == "__main__":

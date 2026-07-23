@@ -1,6 +1,6 @@
 # Retrieval strategies compared
 
-Five retrieval strategies, all run over the invoking project's own
+Six retrieval strategies, all run over the invoking project's own
 docs/code: **lexical** retrieval (TF-IDF + BM25 fused with reciprocal-rank
 fusion) is the zero-dependency baseline that always works; **lexical+ctx**
 layers LLM (or heuristic) document enrichment on top of it; **turbovec**
@@ -10,7 +10,10 @@ via Pyserini) gives you a mature, tunable inverted index instead of this
 repo's from-scratch TF-IDF/BM25, at the cost of a Java 21 JVM; **hybrid**
 (`HybridRetriever`) runs lexical and turbovec arms over the same corpus and
 fuses their rankings with RRF at search time, inheriting turbovec's extras
-requirement.
+requirement; **tree-sitter** (`TreeSitterRetriever`) runs the same lexical
+ranking over AST-boundary ("cAST") code chunks, carrying an enclosing
+function/class breadcrumb on every hit — the chunking step needs the
+`treesitter` extra, but the ranker itself has zero optional dependencies.
 
 ## Selection table
 
@@ -20,6 +23,7 @@ requirement.
 | Query wording likely differs from document wording (paraphrase, synonyms) | `turbovec` |
 | Need Lucene-grade BM25 depth/scale, or the pi-serini paper's tuning | `pi-serini` |
 | Unsure which failure mode dominates, and two backends are installed | Fuse with RRF (see [hybrid fusion](../how-to/hybrid-fusion.md)) |
+| Code/script corpus; want AST-boundary spans + enclosing scope context | `treesitter` |
 
 Repeated with the fusion and contextualization rows:
 

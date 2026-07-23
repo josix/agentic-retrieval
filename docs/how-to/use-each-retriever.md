@@ -1,12 +1,13 @@
 # Use each retriever
 
-All five retriever classes share the same tiny contract: `index(documents)`
+All six retriever classes share the same tiny contract: `index(documents)`
 then `search(query, top_k) -> List[str]` (ranked docids). `Document` is
 `(docid: str, text: str, url: str = "")`. This page walks through the three
 base backends — `lexical`, `turbovec`, and `pi-serini`; for
 `ContextualLexicalRetriever` see
-[LLM contextualization](llm-contextualization.md), and for `HybridRetriever`
-see [hybrid fusion](hybrid-fusion.md).
+[LLM contextualization](llm-contextualization.md), for `HybridRetriever` see
+[hybrid fusion](hybrid-fusion.md), and for `TreeSitterRetriever` see
+`skills/code-retrieval-usage/SKILL.md`.
 
 ## Lexical — `LexicalRetriever` (always works)
 

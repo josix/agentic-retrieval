@@ -180,5 +180,6 @@ resolve any error it reports.
 
 - `dense-retrieval-usage` — turbovec dense ANN retrieval
 - `lucene-retrieval-usage` — pi-serini Lucene BM25 retrieval
+- `code-retrieval-usage` — tree-sitter AST-boundary chunking for code corpora
 - `hybrid-retrieval-usage` — fusing lexical with dense/Lucene, and the
   method-selection decision table

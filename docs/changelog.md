@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+- **Breaking: `retrieval query` default is now consolidated (all-retriever)
+  mode.** With no `--retriever` flag (or the new explicit `--retriever all`
+  alias), `query` loads every available strategy in `_DEFAULT_INDEX_SET`,
+  searches each, and merges/fuses them into a single deduplicated, ranked,
+  explainable list via the new `retrieval.consolidation.consolidate` —
+  same-file overlapping/adjacent spans across retrievers merge into one
+  candidate, and each result carries `score`/`provenance`/`agreement`/
+  `confidence`/`contributors`. A missing backend is skipped (never a hard
+  failure) as long as `lexical` consolidates successfully. New consolidated-
+  mode-only flags: `--weights "name:w,..."` (per-retriever RRF weight
+  override) and `--output PATH` (also persist the JSON envelope to disk).
+  **`--retriever <name>` (single strategy) is unaffected** — its plain-text
+  and `--json` output stay byte-identical to before this change. See
+  [Consolidated query](how-to/consolidated-query.md).
+- **Weighted Reciprocal Rank Fusion.** `retrieval.fusion.reciprocal_rank_fusion`
+  gained a trailing `weights: Optional[List[float]] = None` parameter;
+  `None` (the default) weights every ranking `1.0`, numerically identical to
+  the previous unweighted behavior, so every existing caller is unaffected.
+- **New `retrieval.consolidation` module.** `ConsolidatedHit` dataclass +
+  `consolidate(per_retriever_hits, *, k=60, weights=None,
+  merge_adjacent=True) -> List[ConsolidatedHit]`: groups same-file
+  overlapping/adjacent `SearchHit` spans across retrievers into one
+  candidate, fuses each group's per-retriever ranks with weighted RRF, and
+  returns a list sorted best-first, each hit carrying `provenance` (which
+  retrievers found it), `agreement` (how many), and a `confidence` label
+  (`high` if `agreement >= 2`; else `medium` if the sole contributing arm is
+  a dense/Lucene arm — `turbovec`/`pi-serini`; else `low`).
+- **Tree-sitter (AST-boundary chunking) retrieval strategy.** New
+  `retrieval.ast_chunker` module implements cAST-style (arXiv 2506.15655)
+  split-then-merge chunking at AST node boundaries, via
+  `tree-sitter-language-pack` (new `treesitter` extra). Every chunk carries a
+  dotted `context` breadcrumb (enclosing function/class path, e.g.
+  `"Bar.baz"`). `retrieval.project_loader.load_ast_chunk_documents` is the
+  AST-boundary analog of `load_chunk_documents`, falling back to the
+  line-based chunker per file when a suffix's language is unmapped or a
+  file's AST chunking comes back empty. New `TreeSitterRetriever`
+  (REGISTRY key `treesitter`) subclasses `LexicalRetriever`, ranking with the
+  same TF-IDF + BM25 + RRF over AST chunks with the breadcrumb prefixed into
+  the ranked text — the retriever class itself needs no optional
+  dependency, only the loader does. `Document` and `SearchHit` gained an
+  optional, trailing-default `context: str = ""` field.
 - **`site/` excluded from indexing by default.** `site` (MkDocs/static-site
   build output) joined `DEFAULT_EXCLUDE_DIRS` in `retrieval.project_loader`,
   so generated site assets no longer pollute the index. On-disk caches built

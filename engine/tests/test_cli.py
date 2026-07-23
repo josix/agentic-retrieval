@@ -31,6 +31,13 @@ try:
 except ImportError:
     _TURBOVEC_INSTALLED = False
 
+try:
+    import tree_sitter_language_pack  # noqa: F401
+
+    _TREESITTER_INSTALLED = True
+except ImportError:
+    _TREESITTER_INSTALLED = False
+
 
 def _write(path: pathlib.Path, content: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +145,7 @@ class TestCli(unittest.TestCase):
 
         code, out = _run(
             ["query", "what carries data between networks",
-             "--root", str(self.root), "--top-k", "1"]
+             "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
         )
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "a.txt:1-1")
@@ -147,7 +154,7 @@ class TestCli(unittest.TestCase):
         # No prior "index" call — query must build + persist the cache itself.
         code, out = _run(
             ["query", "what carries data between networks",
-             "--root", str(self.root), "--top-k", "1"]
+             "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
         )
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "a.txt:1-1")
@@ -160,7 +167,8 @@ class TestCli(unittest.TestCase):
         # persist the cache and return results, same as the no-flag case.
         code, out = _run(
             ["query", "what carries data between networks",
-             "--root", str(self.root), "--top-k", "1", "--stale-ok"]
+             "--root", str(self.root), "--retriever", "lexical",
+             "--top-k", "1", "--stale-ok"]
         )
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "a.txt:1-1")
@@ -177,7 +185,8 @@ class TestCli(unittest.TestCase):
         _bump_mtime(new_file)
 
         code, out = _run(
-            ["query", "asteroid belt mars jupiter", "--root", str(self.root), "--top-k", "1"]
+            ["query", "asteroid belt mars jupiter", "--root", str(self.root),
+             "--retriever", "lexical", "--top-k", "1"]
         )
         self.assertEqual(code, 0)
         self.assertEqual(out.strip(), "c.txt:1-1")
@@ -220,9 +229,40 @@ class TestCli(unittest.TestCase):
         self.assertIn("stale: False", out)
 
     def test_json_output_parses(self) -> None:
+        # Regression: an explicit `--retriever lexical` query must produce
+        # byte-identical-shape JSON to the pre-consolidation-mode behavior.
         code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
         self.assertEqual(code, 0)
 
+        code, out = _run(
+            [
+                "query",
+                "what carries data between networks",
+                "--root",
+                str(self.root),
+                "--retriever",
+                "lexical",
+                "--top-k",
+                "1",
+                "--json",
+            ]
+        )
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(set(payload.keys()), {"query", "results"})
+        self.assertEqual(payload["query"], "what carries data between networks")
+        self.assertEqual(len(payload["results"]), 1)
+        result = payload["results"][0]
+        self.assertEqual(
+            set(result.keys()), {"docid", "path", "start_line", "end_line", "rank", "context"}
+        )
+        self.assertEqual(result["docid"], "a.txt:1-1")
+        self.assertEqual(result["path"], "a.txt")
+        self.assertEqual(result["start_line"], 1)
+        self.assertEqual(result["end_line"], 1)
+        self.assertEqual(result["rank"], 0)
+
+    def test_consolidated_default_json_envelope(self) -> None:
         code, out = _run(
             [
                 "query",
@@ -237,13 +277,70 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 0)
         payload = json.loads(out)
         self.assertEqual(payload["query"], "what carries data between networks")
-        self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(payload["mode"], "consolidated")
+        self.assertIn("lexical", payload["retrievers"])
+        self.assertIsInstance(payload["skipped"], list)
+        self.assertGreaterEqual(len(payload["results"]), 1)
         result = payload["results"][0]
-        self.assertEqual(result["docid"], "a.txt:1-1")
-        self.assertEqual(result["path"], "a.txt")
-        self.assertEqual(result["start_line"], 1)
-        self.assertEqual(result["end_line"], 1)
-        self.assertEqual(result["rank"], 0)
+        for key in (
+            "docid", "path", "start_line", "end_line", "rank", "context",
+            "score", "provenance", "agreement", "confidence", "contributors",
+        ):
+            self.assertIn(key, result)
+
+    def test_consolidated_default_retriever_choice_is_explicit_alias(self) -> None:
+        code_default, out_default = _run(
+            ["query", "what carries data between networks",
+             "--root", str(self.root), "--top-k", "1", "--json"]
+        )
+        code_all, out_all = _run(
+            ["query", "what carries data between networks",
+             "--root", str(self.root), "--retriever", "all", "--top-k", "1", "--json"]
+        )
+        self.assertEqual(code_default, 0)
+        self.assertEqual(code_all, 0)
+        payload_default = json.loads(out_default)
+        payload_all = json.loads(out_all)
+        self.assertEqual(payload_default["mode"], payload_all["mode"])
+        self.assertEqual(
+            [r["docid"] for r in payload_default["results"]],
+            [r["docid"] for r in payload_all["results"]],
+        )
+
+    def test_consolidated_text_mode_first_token_is_path_span(self) -> None:
+        code, out = _run(
+            ["query", "what carries data between networks",
+             "--root", str(self.root), "--top-k", "1"]
+        )
+        self.assertEqual(code, 0)
+        first_line = out.splitlines()[0]
+        first_token = first_line.split()[0]
+        self.assertRegex(first_token, r"^[^:]+:\d+-\d+$")
+
+    def test_consolidated_output_flag_writes_parseable_file(self) -> None:
+        output_path = pathlib.Path(self._cache_tmp.name) / "handoff.json"
+        code, _out = _run(
+            [
+                "query", "what carries data between networks",
+                "--root", str(self.root), "--top-k", "1", "--output", str(output_path),
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(output_path.exists())
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["mode"], "consolidated")
+        self.assertIn("results", payload)
+
+    def test_consolidated_graceful_skip_exits_zero_when_extras_absent(self) -> None:
+        # Even if every optional retriever is unavailable, the always-present
+        # `lexical` strategy consolidating on its own must still exit 0.
+        code, out = _run(
+            ["query", "what carries data between networks",
+             "--root", str(self.root), "--top-k", "1", "--json"]
+        )
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertIn("lexical", payload["retrievers"])
 
     def test_stats_reports_retriever_name(self) -> None:
         code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
@@ -258,7 +355,9 @@ class TestCli(unittest.TestCase):
             main(["index", "--root", str(self.root), "--retriever", "nope"])
         # ...while all documented choices parse (execution may still fail
         # later on missing optional extras, which is covered separately).
-        for choice in ("lexical", "lexical+ctx", "turbovec", "pi-serini", "hybrid"):
+        for choice in (
+            "lexical", "lexical+ctx", "turbovec", "pi-serini", "hybrid", "treesitter",
+        ):
             with self.subTest(choice=choice):
                 code, _out, _err = _run_with_stderr(
                     ["index", "--root", str(self.root), "--retriever", choice, "--force"]
@@ -334,6 +433,47 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("turbovec", err)
+
+    def test_treesitter_is_a_valid_retriever_choice(self) -> None:
+        code, _out, err = _run_with_stderr(
+            ["index", "--root", str(self.root), "--retriever", "treesitter", "--force"]
+        )
+        self.assertIn(code, (0, 1))
+        if code == 1:
+            self.assertIn("treesitter", err)
+
+    @unittest.skipIf(
+        _TREESITTER_INSTALLED, "tree-sitter-language-pack installed; skip path not exercised"
+    )
+    def test_index_all_skips_treesitter_when_extras_missing(self) -> None:
+        code, out = _run(["index", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("treesitter: skipped", out)
+        self.assertTrue((index_dir(self.root) / "lexical.json").exists())
+
+    @unittest.skipUnless(_TREESITTER_INSTALLED, "tree-sitter-language-pack not installed")
+    def test_index_all_builds_treesitter_when_installed(self) -> None:
+        code, out = _run(["index", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("treesitter: indexed", out)
+        self.assertTrue((index_dir(self.root) / "treesitter.json").exists())
+
+    @unittest.skipUnless(_TREESITTER_INSTALLED, "tree-sitter-language-pack not installed")
+    def test_query_treesitter_json_includes_context(self) -> None:
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "treesitter", "--force"]
+        )
+        self.assertEqual(code, 0)
+        code, out = _run(
+            [
+                "query", "what carries data between networks",
+                "--root", str(self.root), "--retriever", "treesitter",
+                "--top-k", "1", "--json",
+            ]
+        )
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertIn("context", payload["results"][0])
 
     def test_bad_args_exit_nonzero(self) -> None:
         with self.assertRaises(SystemExit) as ctx:
