@@ -55,7 +55,7 @@ skills/lexical-retrieval-usage/       knowledge skill: contextual lexical retrie
 skills/dense-retrieval-usage/         knowledge skill: turbovec dense ANN
 skills/lucene-retrieval-usage/        knowledge skill: pi-serini Lucene BM25
 skills/hybrid-retrieval-usage/        knowledge skill: fusion + method selection
-engine/                               vendored offline-first retrieval engine (rag-retrieval package)
+engine/                               vendored offline-first retrieval engine (agentic-retrieval package)
   pyproject.toml
   uv.lock
   retrieval/  tests/

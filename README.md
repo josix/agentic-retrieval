@@ -83,7 +83,7 @@ skills/dense-retrieval-usage/         knowledge skill: turbovec dense ANN
 skills/lucene-retrieval-usage/        knowledge skill: pi-serini Lucene BM25
 skills/code-retrieval-usage/          knowledge skill: tree-sitter AST-boundary chunking
 skills/hybrid-retrieval-usage/        knowledge skill: fusion + method selection
-engine/                               vendored offline-first retrieval engine (rag-retrieval package)
+engine/                               vendored offline-first retrieval engine (agentic-retrieval package)
   pyproject.toml
   uv.lock
   retrieval/  tests/
@@ -97,7 +97,7 @@ docs/                                  Diataxis-organized MkDocs site (tutorials
 
 ## Build & distribute
 
-The engine (`engine/`) is the installable `rag-retrieval` package. See
+The engine (`engine/`) is the installable `agentic-retrieval` package. See
 [`docs/how-to/build-and-release.md`](docs/how-to/build-and-release.md) for
 building a wheel/sdist with `uv build`, installing it (locally, or straight
 from GitHub via a `git+...#subdirectory=engine` URL), the release workflow,

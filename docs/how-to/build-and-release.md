@@ -1,7 +1,7 @@
 # Build, distribute, and release
 
 The engine (`engine/`) is a standard `hatchling`-backed Python package
-(`rag-retrieval`).
+(`agentic-retrieval`).
 
 ## Build a wheel + sdist
 
@@ -9,13 +9,13 @@ The engine (`engine/`) is a standard `hatchling`-backed Python package
 cd engine && uv build
 ```
 
-This produces `engine/dist/rag_retrieval-0.2.0-py3-none-any.whl` and the
+This produces `engine/dist/agentic_retrieval-0.4.0-py3-none-any.whl` and the
 matching `.tar.gz` sdist (gitignored — build artifacts, not checked in).
 
 ## Install the built wheel directly
 
 ```bash
-uv pip install ./engine/dist/rag_retrieval-0.2.0-py3-none-any.whl
+uv pip install ./engine/dist/agentic_retrieval-0.4.0-py3-none-any.whl
 ```
 
 The wheel registers a `retrieval` console script
@@ -23,11 +23,11 @@ The wheel registers a `retrieval` console script
 published, `uvx` can run it without a local install or checkout:
 
 ```bash
-uvx --from rag-retrieval retrieval query "..." --root <path-to-project>
+uvx --from agentic-retrieval retrieval query "..." --root <path-to-project>
 ```
 
 !!! note "PyPI gate"
-    Not yet available — this only resolves once `rag-retrieval` is
+    Not yet available — this only resolves once `agentic-retrieval` is
     published to PyPI; until then, use
     `uv run --project engine --extra all retrieval ...` above.
 
@@ -37,13 +37,13 @@ Or install straight from GitHub, without building locally, using the
 `engine/` subdirectory of this monorepo:
 
 ```bash
-uv pip install "rag-retrieval @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
+uv pip install "agentic-retrieval @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
 ```
 
 With optional extras:
 
 ```bash
-uv pip install "rag-retrieval[all] @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
+uv pip install "agentic-retrieval[all] @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
 ```
 
 ## Release workflow
