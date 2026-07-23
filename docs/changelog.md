@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - **Breaking: `retrieval query` default is now consolidated (all-retriever)
   mode.** With no `--retriever` flag (or the new explicit `--retriever all`

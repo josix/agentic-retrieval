@@ -17,7 +17,7 @@ the parent repository: https://github.com/josix/agentic-retrieval
 From a built wheel or sdist:
 
 ```bash
-uv pip install rag_retrieval-0.2.0-py3-none-any.whl
+uv pip install rag_retrieval-0.3.0-py3-none-any.whl
 ```
 
 Directly from GitHub (no local checkout needed), using the `engine/`
