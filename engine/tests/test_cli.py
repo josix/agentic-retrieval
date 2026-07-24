@@ -489,6 +489,104 @@ class TestCli(unittest.TestCase):
             main(["query"])
         self.assertNotEqual(ctx.exception.code, 0)
 
+    # -- tune / --auto / hyperparameter flags ----------------------------------
+
+    def test_tune_json_emits_signals_and_params(self) -> None:
+        code, out = _run(["tune", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertIn("signals", payload)
+        self.assertIn("params", payload)
+        self.assertIn("n_files", payload["signals"])
+        self.assertIn("bm25_k1", payload["params"])
+        self.assertIn("code_chars", payload["params"])
+
+    def test_tune_writes_nothing(self) -> None:
+        code, _out = _run(["tune", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertFalse(index_dir(self.root).exists())
+
+    def test_bm25_k1_flag_reaches_persisted_meta(self) -> None:
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.9"]
+        )
+        self.assertEqual(code, 0)
+        meta_path = index_dir(self.root) / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["hyperparams"]["bm25_k1"], 1.9)
+
+    def test_bm25_k1_flag_changes_search_behavior(self) -> None:
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.9"]
+        )
+        self.assertEqual(code, 0)
+        directory = index_dir(self.root)
+        data = json.loads((directory / "lexical.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["bm25"]["k1"], 1.9)
+
+    def test_auto_index_then_plain_query_reuses_persisted_tokenizer(self) -> None:
+        code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical", "--auto"])
+        self.assertEqual(code, 0)
+        self.assertIn("indexed 2 chunks ->", out)
+
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertIn("hyperparams", meta)
+        self.assertIn("corpus_stats", meta)
+        self.assertTrue(meta["corpus_stats"]["auto"])
+        persisted_tokenizer = meta["hyperparams"]["tokenizer"]
+
+        data = json.loads((index_dir(self.root) / "lexical.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["bm25"]["tokenizer"], persisted_tokenizer)
+
+        # A plain query afterward must reuse the persisted tokenizer, not
+        # re-derive it — same-cache round trip, no --auto needed to query.
+        code, out = _run(
+            ["query", "what carries data between networks",
+             "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "a.txt:1-1")
+
+    def test_no_hyperparameter_flags_omits_meta_blocks(self) -> None:
+        code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertNotIn("hyperparams", meta)
+        self.assertNotIn("corpus_stats", meta)
+
+    def test_changed_bm25_k1_triggers_rebuild_same_value_reports_up_to_date(self) -> None:
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.2"]
+        )
+        self.assertEqual(code, 0)
+        meta_path = index_dir(self.root) / "meta.json"
+        first_mtime_ns = meta_path.stat().st_mtime_ns
+
+        # Same value again: fast path, no rewrite.
+        code, out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.2"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("up to date", out)
+        self.assertEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
+
+        # Changed value: triggers a rebuild despite an unchanged corpus.
+        code, out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.7"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("indexed 2 chunks ->", out)
+        self.assertNotEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
+
+    def test_stats_echoes_hyperparams_and_corpus_stats(self) -> None:
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.3"]
+        )
+        self.assertEqual(code, 0)
+        code, out = _run(["stats", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("hyperparams:", out)
+
 
 if __name__ == "__main__":
     unittest.main()

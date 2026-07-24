@@ -2,6 +2,27 @@
 
 from typing import List, Optional, Tuple
 
+#: Candidate-pool sizing constants (see ``candidate_pool``): each retriever
+#: is asked for ``top_k * POOL_MULTIPLIER`` candidates (floored at
+#: ``POOL_FLOOR``) before RRF fusion truncates to ``top_k``, so fusion has
+#: enough per-arm overlap to work with instead of starving on a shallow pool.
+POOL_MULTIPLIER = 10
+POOL_FLOOR = 50
+
+
+def candidate_pool(top_k: int, n_units: Optional[int] = None) -> int:
+    """Return the per-retriever candidate-pool depth for a ``top_k`` query.
+
+    ``min(max(top_k * POOL_MULTIPLIER, POOL_FLOOR), n_units)`` — deep enough
+    for RRF to have real overlap to fuse, but never deeper than the corpus
+    itself when *n_units* (the retriever's own indexed unit count) is known.
+    ``n_units=None`` (the default) skips that cap.
+    """
+    pool = max(top_k * POOL_MULTIPLIER, POOL_FLOOR)
+    if n_units is not None:
+        pool = min(pool, n_units)
+    return pool
+
 
 def reciprocal_rank_fusion(
     rankings: List[List[int]],

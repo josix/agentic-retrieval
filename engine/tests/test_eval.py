@@ -311,6 +311,16 @@ class TestEvalCli(unittest.TestCase):
         with self.assertRaises(SystemExit):
             main(["eval"])
 
+    def test_eval_auto_records_resolved_params_in_report(self) -> None:
+        code, out = self._run(
+            ["eval", "--queries", str(_QUERIES_PATH), "--json", "--warm-runs", "0", "--auto"]
+        )
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertIn("auto_params", payload)
+        self.assertIn("bm25_k1", payload["auto_params"])
+        self.assertIn("lexical", payload["aggregate"])
+
 
 @unittest.skipUnless(_TURBOVEC_INSTALLED, "turbovec not installed")
 class TestRunEvalWithTurbovec(unittest.TestCase):

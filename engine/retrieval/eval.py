@@ -23,10 +23,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from retrieval.chunker import ChunkingPolicy
 from retrieval.consolidation import consolidate
 from retrieval.document import SearchHit
+from retrieval.fusion import candidate_pool
 from retrieval.project_loader import load_ast_chunk_documents, load_chunk_documents
-from retrieval.retrievers import PiSeriniRetriever, Retriever, build_retriever
+from retrieval.retrievers import PiSeriniRetriever, Retriever, build_retriever, resolve_ctor_kwargs
 
 #: Strategies attempted by run_eval, in report order (mirrors
 #: ``retrieval.cli._DEFAULT_INDEX_SET``).
@@ -222,7 +224,9 @@ def _load_labeled_queries(queries_path: Path) -> Tuple[Path, List[LabeledQuery]]
     return corpus_root, queries
 
 
-def _make_eval_retriever(name: str, tmp_dir_holder: List[Optional[str]]) -> Retriever:
+def _make_eval_retriever(
+    name: str, tmp_dir_holder: List[Optional[str]], params: Optional[Dict[str, Any]] = None
+) -> Retriever:
     """Instantiate *name*; ``pi-serini`` gets a durable per-eval-run Lucene
     dir (mirrors ``cli._make_retriever``) since it can't index without one.
 
@@ -234,18 +238,21 @@ def _make_eval_retriever(name: str, tmp_dir_holder: List[Optional[str]]) -> Retr
     if name == "pi-serini":
         if tmp_dir_holder[0] is None:
             tmp_dir_holder[0] = tempfile.mkdtemp(prefix="retrieval_eval_")
-        return PiSeriniRetriever(index_path=Path(tmp_dir_holder[0]) / "pi-serini-lucene")
-    return build_retriever(name)
+        ctor_kwargs = resolve_ctor_kwargs("pi-serini", PiSeriniRetriever, params)
+        return PiSeriniRetriever(
+            index_path=Path(tmp_dir_holder[0]) / "pi-serini-lucene", **ctor_kwargs
+        )
+    return build_retriever(name, params)
 
 
-def _documents_for(root: Path, name: str):
+def _documents_for(root: Path, name: str, policy=None):
     if name == "treesitter":
-        return load_ast_chunk_documents(root)
-    return load_chunk_documents(root)
+        return load_ast_chunk_documents(root, policy=policy)
+    return load_chunk_documents(root, policy=policy)
 
 
 def _build_retrievers(
-    root: Path,
+    root: Path, params: Optional[Dict[str, Any]] = None, policy=None
 ) -> Tuple[Dict[str, Retriever], List[Dict[str, str]], Dict[str, float], Optional[str]]:
     """Build every strategy in ``_STRATEGIES`` in-memory (no persistence),
     skipping (not failing) any whose optional extras are missing.
@@ -260,8 +267,8 @@ def _build_retrievers(
     tmp_dir_holder: List[Optional[str]] = [None]
     for name in _STRATEGIES:
         try:
-            retriever = _make_eval_retriever(name, tmp_dir_holder)
-            documents = _documents_for(root, name)
+            retriever = _make_eval_retriever(name, tmp_dir_holder, params)
+            documents = _documents_for(root, name, policy)
             start = time.perf_counter()
             retriever.index(documents)
             build_s[name] = time.perf_counter() - start
@@ -310,7 +317,10 @@ def _timed_consolidate(
 def _eval_single_query(
     query: LabeledQuery, retrievers: Dict[str, Retriever], k: int, warm_runs: int
 ) -> QueryEval:
-    pool = max(k * 3, 10)
+    # Not capped to a corpus size: the consolidation quadratic span-merge
+    # stays cheap enough at this depth for the eval harness's per-query
+    # corpora (see the same tradeoff note in cli._query_all).
+    pool = candidate_pool(k)
     per_retriever_hits: Dict[str, List[SearchHit]] = {}
     query_eval = QueryEval(query_id=query.id, category=query.category)
 
@@ -362,7 +372,11 @@ def _aggregate(query_evals: List[QueryEval]) -> Dict[str, Dict[str, float]]:
 
 
 def run_eval(
-    queries_path: _PathLike, root: Optional[_PathLike] = None, k: int = 5, warm_runs: int = 5
+    queries_path: _PathLike,
+    root: Optional[_PathLike] = None,
+    k: int = 5,
+    warm_runs: int = 5,
+    params: Optional[Dict[str, Any]] = None,
 ) -> EvalReport:
     """Run the full eval harness over the labeled query set at *queries_path*.
 
@@ -372,12 +386,18 @@ def run_eval(
     recall@k/nDCG@k for every retriever (including ``"consolidated"``),
     profiles cold/warm search latency, and tallies confidence-bucket
     precision over the consolidated top-k hits across every query.
+
+    *params* (default ``None``, reproducing today's static-default behavior)
+    is threaded into each retriever's construction (filtered to its own
+    ``ACCEPTS``) and into chunking via a ``ChunkingPolicy`` built from its
+    chunking keys — see ``retrieval.autotune.resolve_params``.
     """
     queries_path = Path(queries_path)
     default_root, labeled_queries = _load_labeled_queries(queries_path)
     corpus_root = Path(root) if root is not None else default_root
+    policy = ChunkingPolicy.from_dict(params) if params else None
 
-    retrievers, skipped, build_s, tmp_dir = _build_retrievers(corpus_root)
+    retrievers, skipped, build_s, tmp_dir = _build_retrievers(corpus_root, params, policy)
     try:
         query_evals = [
             _eval_single_query(query, retrievers, k, warm_runs) for query in labeled_queries

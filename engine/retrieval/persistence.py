@@ -61,6 +61,20 @@ from retrieval.retrievers import (
 #: so it never feeds back into an index/query run.
 CACHE_DIRNAME = ".agentic-retrieval"
 
+#: Loader kwargs whose persisted (JSON-list) form must be rehydrated back
+#: into a frozenset before being passed to ``discover_files``/
+#: ``compute_fingerprint`` — those three accept only frozensets.
+_FROZENSET_LOADER_KEYS = frozenset({"extensions", "exclude_dirs", "include_basenames"})
+
+#: Chunking-policy keys that affect every retriever's indexed text (not just
+#: one retriever family), so they're always included in ``relevant_params``
+#: regardless of a retriever class's own ``ACCEPTS``. Named directly here
+#: (rather than imported from ``retrieval.chunker.ChunkingPolicy``) since
+#: that dataclass doesn't exist until it's added alongside autotune.
+_CHUNKING_PARAM_KEYS = frozenset(
+    {"prose_chars", "config_chars", "code_chars", "default_chars", "ast_max_chars"}
+)
+
 _LEXICAL_FILENAME = "lexical.json"
 _META_FILENAME = "meta.json"
 
@@ -149,12 +163,56 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
     os.replace(tmp_path, path)
 
 
+def relevant_params(retriever_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the subset of *params* that actually affects *retriever_name*.
+
+    Intersects *params* with the retriever class's own ``ACCEPTS`` (defaults
+    to an empty set for retrievers that don't declare one yet) plus the
+    chunking-policy keys, which affect every retriever's indexed text
+    regardless of family.
+    """
+    _data_filename, _meta_filename, cls = _layout(retriever_name)
+    accepts = getattr(cls, "ACCEPTS", frozenset())
+    keys = accepts | _CHUNKING_PARAM_KEYS
+    return {k: v for k, v in params.items() if k in keys}
+
+
+def _serializable_loader_kw(loader_kw: Dict[str, Any]) -> Dict[str, Any]:
+    """JSON-safe form of a loader-kwargs dict: frozensets/sets become sorted
+    lists (restored back into frozensets by ``_loader_kw_from_meta``)."""
+    result: Dict[str, Any] = {}
+    for key, value in loader_kw.items():
+        if isinstance(value, (frozenset, set)):
+            result[key] = sorted(value)
+        else:
+            result[key] = value
+    return result
+
+
+def _loader_kw_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Rehydrate a meta's persisted ``loader_kw`` block back into the kwargs
+    ``discover_files``/``compute_fingerprint`` expect (frozensets for the
+    keys that need them)."""
+    loader_kw = meta.get("loader_kw") or {}
+    result: Dict[str, Any] = {}
+    for key, value in loader_kw.items():
+        if key in _FROZENSET_LOADER_KEYS and isinstance(value, list):
+            result[key] = frozenset(value)
+        else:
+            result[key] = value
+    return result
+
+
 def save_index(
     retriever: Retriever,
     root: "os.PathLike[str] | str",
     fingerprint: str,
     retriever_name: str,
     engine_version: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    corpus_stats: Optional[Dict[str, Any]] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Persist a fitted *retriever* + metadata for *root*, atomically.
 
@@ -163,6 +221,14 @@ def save_index(
     into ``index_dir(root)``, creating the directory if needed; filenames are
     per-retriever (see ``_CACHE_LAYOUT``), so different retrievers' caches
     for the same root coexist. Returns the directory written to.
+
+    When *params* is given, the meta gains a ``"hyperparams"`` block —
+    the subset of *params* relevant to *retriever_name* (see
+    ``relevant_params``) — used by ``is_stale`` to detect a hyperparameter
+    change even when the corpus fingerprint hasn't moved. *corpus_stats* and
+    *loader_kw* are recorded verbatim (JSON-safe-ified) when given; all three
+    are omitted from the meta entirely when not supplied, preserving today's
+    meta shape for callers that don't pass them.
     """
     data_filename, meta_filename, _cls = _layout(retriever_name)
     directory = index_dir(root)
@@ -182,6 +248,12 @@ def save_index(
         "file_count": file_count,
         "retriever_name": retriever_name,
     }
+    if params is not None:
+        meta["hyperparams"] = relevant_params(retriever_name, params)
+    if corpus_stats is not None:
+        meta["corpus_stats"] = corpus_stats
+    if loader_kw is not None:
+        meta["loader_kw"] = _serializable_loader_kw(loader_kw)
     _atomic_write_json(directory / meta_filename, meta)
 
     return directory
@@ -233,6 +305,34 @@ def cached_retrievers(root: "os.PathLike[str] | str") -> Dict[str, Dict[str, Any
     return found
 
 
-def is_stale(root: "os.PathLike[str] | str", meta: Dict[str, Any], **loader_kw: Any) -> bool:
-    """Return True if *root*'s current fingerprint differs from *meta*'s."""
-    return compute_fingerprint(root, **loader_kw) != meta.get("fingerprint")
+def is_stale(
+    root: "os.PathLike[str] | str",
+    meta: Dict[str, Any],
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    **loader_kw: Any,
+) -> bool:
+    """Return True if *root* + *meta* should be rebuilt.
+
+    True when the current fingerprint differs from *meta*'s, OR (when
+    *params* is given) the relevant subset of *params* for *meta*'s
+    retriever differs from *meta*'s persisted ``"hyperparams"`` (compared as
+    ``json.dumps(..., sort_keys=True)`` strings, so key order never causes a
+    false positive). *params* being ``None`` (the default) preserves today's
+    fingerprint-only behavior. A pre-upgrade meta with no ``"hyperparams"``
+    key is always considered stale under any non-``None`` *params*, forcing
+    a one-time rebuild that then records the block going forward.
+
+    Explicit *loader_kw* takes precedence for fingerprinting; otherwise the
+    loader kwargs are rehydrated from *meta*'s persisted ``"loader_kw"``
+    block (see ``_loader_kw_from_meta``), falling back to ``discover_files``'
+    own defaults when neither is available.
+    """
+    resolved_loader_kw = loader_kw if loader_kw else _loader_kw_from_meta(meta)
+    if compute_fingerprint(root, **resolved_loader_kw) != meta.get("fingerprint"):
+        return True
+    if params is None:
+        return False
+    retriever_name = meta.get("retriever_name", "lexical")
+    relevant = relevant_params(retriever_name, params)
+    return json.dumps(relevant, sort_keys=True) != json.dumps(meta.get("hyperparams"), sort_keys=True)

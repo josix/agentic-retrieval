@@ -2,7 +2,21 @@
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from pathlib import PurePosixPath
+from typing import Any, Dict, List, Optional, Tuple
+
+# ast_chunker.py imports no optional (tree-sitter) deps at module scope —
+# its tree-sitter-language-pack import is lazy, inside chunk_code() — so
+# importing LANGUAGE_BY_SUFFIX here is always safe, even without the
+# treesitter extra installed (see retrieval/project_loader.py, which does
+# the same top-level import).
+from retrieval.ast_chunker import LANGUAGE_BY_SUFFIX
+
+#: File suffixes chunked as prose (``ChunkingPolicy.prose_chars``).
+PROSE_SUFFIXES = frozenset({".md", ".markdown", ".rst", ".txt"})
+
+#: File suffixes chunked as structured config (``ChunkingPolicy.config_chars``).
+CONFIG_SUFFIXES = frozenset({".yaml", ".yml", ".toml", ".ini", ".cfg", ".json"})
 
 
 @dataclass
@@ -15,6 +29,58 @@ class Chunk:
     position: int
     start_line: int
     end_line: int
+
+
+@dataclass(frozen=True)
+class ChunkingPolicy:
+    """Per-file-kind chunk-size policy, agent-decidable via ``retrieval
+    tune``/``--auto`` (see ``retrieval.autotune``).
+
+    All five sizes default to ``400`` so ``DEFAULT_POLICY`` reproduces
+    today's chunking behavior exactly (the historical single ``target_chars``
+    parameter); larger values (e.g. ``code_chars=1200``, ``config_chars=700``)
+    only come from autotune's signal-based heuristics or an explicit
+    override, never from this default.
+    """
+
+    prose_chars: int = 400
+    config_chars: int = 400
+    code_chars: int = 400
+    default_chars: int = 400
+    ast_max_chars: int = 1200
+
+    def target_chars_for(self, path: str) -> int:
+        """Return the line-chunker ``target_chars`` bucket for *path*, by
+        suffix: prose -> ``prose_chars``, structured config ->
+        ``config_chars``, a tree-sitter-mapped code suffix -> ``code_chars``,
+        anything else -> ``default_chars``."""
+        suffix = PurePosixPath(path).suffix.lower()
+        if suffix in PROSE_SUFFIXES:
+            return self.prose_chars
+        if suffix in CONFIG_SUFFIXES:
+            return self.config_chars
+        if suffix in LANGUAGE_BY_SUFFIX:
+            return self.code_chars
+        return self.default_chars
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "prose_chars": self.prose_chars,
+            "config_chars": self.config_chars,
+            "code_chars": self.code_chars,
+            "default_chars": self.default_chars,
+            "ast_max_chars": self.ast_max_chars,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ChunkingPolicy":
+        fields = ("prose_chars", "config_chars", "code_chars", "default_chars", "ast_max_chars")
+        return cls(**{k: data[k] for k in fields if k in data})
+
+
+#: The historical, single-``target_chars=400`` behavior — every bucket at
+#: 400, so passing ``policy=None`` anywhere reproduces today's chunking.
+DEFAULT_POLICY = ChunkingPolicy()
 
 
 def _detect_title(lines: List[str], doc_id: str) -> str:
