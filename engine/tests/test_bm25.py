@@ -63,5 +63,31 @@ class TestBM25Ordering(unittest.TestCase):
         self.assertEqual(len(results), len(self.docs))
 
 
+class TestBM25Tokenizer(unittest.TestCase):
+    def test_default_tokenizer_is_plain(self) -> None:
+        self.assertEqual(BM25Index().tokenizer, "plain")
+
+    def test_unknown_tokenizer_mode_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            BM25Index(tokenizer="not-a-mode")
+
+    def test_to_dict_from_dict_round_trips_tokenizer(self) -> None:
+        idx = BM25Index(tokenizer="code")
+        idx.fit(["def getUserById(): pass"])
+        data = idx.to_dict()
+        self.assertEqual(data["tokenizer"], "code")
+        restored = BM25Index.from_dict(data)
+        self.assertEqual(restored.tokenizer, "code")
+        self.assertEqual(idx.query("user"), restored.query("user"))
+
+    def test_from_dict_defaults_to_plain_when_tokenizer_key_missing(self) -> None:
+        idx = BM25Index()
+        idx.fit(["hello world"])
+        data = idx.to_dict()
+        del data["tokenizer"]
+        restored = BM25Index.from_dict(data)
+        self.assertEqual(restored.tokenizer, "plain")
+
+
 if __name__ == "__main__":
     unittest.main()
