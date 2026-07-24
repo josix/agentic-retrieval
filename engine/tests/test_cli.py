@@ -562,6 +562,94 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rebuilt_data["bm25"]["k1"], 1.9)
         self.assertEqual(rebuilt_data["bm25"]["tokenizer"], "code")
 
+    def test_stale_rebuild_via_bare_index_preserves_persisted_hyperparams(self) -> None:
+        # Index with explicit, non-default hyperparameters.
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical",
+             "--bm25-k1", "1.9", "--tokenizer", "code"]
+        )
+        self.assertEqual(code, 0)
+        meta_path = index_dir(self.root) / "meta.json"
+        first_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(first_meta["hyperparams"]["bm25_k1"], 1.9)
+        self.assertEqual(first_meta["hyperparams"]["tokenizer"], "code")
+
+        # Dirty the corpus fingerprint, then a bare `index` (no flags at
+        # all) — this is the routine "refresh my index" workflow.
+        new_file = self.root / "c.txt"
+        _write(new_file, "asteroid belt lies between mars and jupiter")
+        _bump_mtime(new_file)
+
+        code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+        self.assertIn("indexed 3 chunks ->", out)
+
+        rebuilt_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(rebuilt_meta["hyperparams"]["bm25_k1"], 1.9)
+        self.assertEqual(rebuilt_meta["hyperparams"]["tokenizer"], "code")
+        rebuilt_data = json.loads(
+            (index_dir(self.root) / "lexical.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(rebuilt_data["bm25"]["k1"], 1.9)
+        self.assertEqual(rebuilt_data["bm25"]["tokenizer"], "code")
+
+    def test_stale_rebuild_via_index_force_preserves_persisted_hyperparams(self) -> None:
+        # --force means "rebuild", not "reset my settings": a bare --force
+        # (no hyperparameter flags) must also recover recorded values.
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical",
+             "--bm25-k1", "1.9", "--tokenizer", "code"]
+        )
+        self.assertEqual(code, 0)
+
+        code, out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--force"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("indexed 2 chunks ->", out)
+
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["hyperparams"]["bm25_k1"], 1.9)
+        self.assertEqual(meta["hyperparams"]["tokenizer"], "code")
+        data = json.loads((index_dir(self.root) / "lexical.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["bm25"]["k1"], 1.9)
+        self.assertEqual(data["bm25"]["tokenizer"], "code")
+
+    def test_explicit_flag_still_overwrites_recorded_hyperparams_on_reindex(self) -> None:
+        # Explicit flags/--auto must always win over recovery, even on a
+        # from-existing-meta rebuild.
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical",
+             "--bm25-k1", "1.9", "--tokenizer", "code"]
+        )
+        self.assertEqual(code, 0)
+
+        code, out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical",
+             "--force", "--bm25-k1", "1.1"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("indexed 2 chunks ->", out)
+
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["hyperparams"]["bm25_k1"], 1.1)
+        # tokenizer was not re-specified this time, but since this run
+        # passed *some* explicit flag, resolve_params was invoked fresh
+        # from static defaults + that override — tokenizer reverts to
+        # "plain" here, which is the documented "explicit run" semantics
+        # (an explicit hyperparameter run always starts from static
+        # defaults + overrides, never merges with prior recorded values).
+        self.assertEqual(meta["hyperparams"]["tokenizer"], "plain")
+
+    def test_from_scratch_index_with_no_flags_keeps_static_defaults(self) -> None:
+        # No prior meta to recover from: must behave exactly as before this
+        # fix (no hyperparams/corpus_stats block at all).
+        code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertNotIn("hyperparams", meta)
+        self.assertNotIn("corpus_stats", meta)
+
     def test_auto_index_then_plain_query_reuses_persisted_tokenizer(self) -> None:
         code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical", "--auto"])
         self.assertEqual(code, 0)

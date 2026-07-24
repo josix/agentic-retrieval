@@ -349,14 +349,25 @@ def _index_all(
     """Build every strategy in ``_DEFAULT_INDEX_SET``, skipping (not failing)
     any whose optional extras aren't installed. Only a failure to build the
     always-available ``lexical`` strategy is treated as a hard failure.
+
+    When *params* is ``None`` (no ``--auto``, no explicit hyperparameter
+    flag), each strategy's own previously recorded hyperparameters are
+    recovered from its existing meta (see ``_params_for_rebuild``) — so a
+    routine ``retrieval index`` refresh (with or without ``--force``) never
+    silently reverts a strategy's recorded decisions to static defaults.
+    Explicit flags/``--auto`` (non-``None`` *params*) always win and are
+    applied identically to every strategy, as before.
     """
     lexical_failed = False
     for name in _DEFAULT_INDEX_SET:
         if not force and _up_to_date_message(root, name, params) is not None:
             print(f"{name}: up to date (use --force to rebuild)")
             continue
+        build_params, build_corpus_stats, build_policy = params, corpus_stats, policy
+        if build_params is None:
+            build_params, build_corpus_stats, build_policy = _params_for_rebuild(root, name, None)
         try:
-            retriever = _build_and_save(root, name, params, corpus_stats, policy)
+            retriever = _build_and_save(root, name, build_params, build_corpus_stats, build_policy)
             chunk_count = len(retriever.to_dict()["docids"])
             print(f"{name}: indexed {chunk_count} chunks")
         except RuntimeError as exc:
@@ -377,6 +388,12 @@ def _cmd_index(args: argparse.Namespace) -> int:
         if message is not None:
             print(message)
             return 0
+    # Nothing explicit was given (no --auto, no hyperparameter flag): a
+    # routine refresh (with or without --force) must not silently revert
+    # this retriever's own previously recorded hyperparameters to static
+    # defaults — recover them from its existing meta, if any.
+    if params is None:
+        params, corpus_stats, policy = _params_for_rebuild(root, args.retriever, None)
     fingerprint = compute_fingerprint(root)
     retriever = _make_retriever(root, args.retriever, params)
     retriever.index(_documents_for(root, args.retriever, policy))
