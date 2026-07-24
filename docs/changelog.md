@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- **New default deep-answer workflow (Q/R/T/C/S).** The `retrieval` skill's
+  Step 3 now runs a phased Decompose → Retrieve-per-sub-question → Trace →
+  Coverage-gate → Synthesize loop by default for explanatory/comprehensiveness
+  questions (with a shallow triage fast-path for bare locate-a-symbol asks),
+  replacing the previous four-step loop with an explicit coverage checklist
+  that must be satisfied before answering. **New optional `retrieval-tracer`
+  agent** (`agents/retrieval-tracer.md`) for fanning out Phase T across
+  sub-aspects on broad questions (≥4 independent sub-aspects), returning
+  detailed `file:line` traces to be stitched together by the caller.
+  `docs/how-to/consolidated-query.md` and
+  `docs/how-to/integrate-coding-agents.md` document the workflow's use of the
+  `--output` JSON envelope as the per-sub-question seed carrier, including a
+  non-Claude-agent variant using only the CLI. **No CLI output, JSON
+  envelope, or engine logic changed** — this is entirely plugin-primitive
+  (skill/agent/doc) guidance. `--queries-file`/`--path-prefix` engine flags
+  were considered to support this workflow natively but deferred; the
+  workflow is achievable today with per-sub-question `query --output` calls.
+- **Docs/guidance-only clarification.** The `retrieval` skill, the five
+  per-method usage skills, and the `retrieval.consolidation` docstrings/docs
+  now spell out that the consolidated list is scaffolding for exploration
+  (not a finished answer to hand the user directly), and that `score`/
+  `agreement`/`confidence` measure cross-retriever agreement on query-text
+  match — not that a span is current, canonical, or non-deprecated. No CLI
+  output, JSON envelope, or engine logic changed.
+
 ## 0.3.0
 
 - **Breaking: `retrieval query` default is now consolidated (all-retriever)

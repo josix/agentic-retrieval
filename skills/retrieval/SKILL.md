@@ -45,7 +45,8 @@ backend is skipped with a note, never a hard failure.
 else skipped with a note — never a hard failure). `query` with no
 `--retriever` (the default, alias `--retriever all`) **consolidates every
 available strategy into a single deduplicated, ranked, explainable list** —
-a handoff a following conversation/agent can act on directly. Pass
+a ranked set of entry points a following conversation/agent can explore and
+verify from (not a finished answer — see "Presenting your answer"). Pass
 `--retriever <name>` to query one strategy instead — see "Agent routing"
 below for when a single strategy is still the right call.
 
@@ -164,7 +165,8 @@ so the `Read` affordance survives); `--json` emits `{"query", "mode":
 "results": [{"docid", "path", "start_line", "end_line", "rank", "context",
 "score", "provenance", "agreement", "confidence", "contributors"}, ...]}`.
 Pass `--output PATH` to also persist that same JSON envelope to disk (a
-persistable handoff for a following conversation/agent), and
+persistable ranking a following conversation/agent verifies and explores
+from — see "Presenting your answer"), and
 `--weights "name:w,..."` to bias specific retrievers in the fusion. A missing
 backend is skipped (noted on stderr in text mode, in `"skipped"` in JSON),
 never a hard failure, as long as the always-available `lexical` strategy
@@ -219,26 +221,82 @@ everything if it points at an already-excluded or empty directory.
 ### Step 3 — Explore from the hits, then answer
 
 Retrieved spans are **seeds for exploration, not the final answer**. A hit
-tells you *where* to start reading, not that you are done. After opening a
-span with `Read`:
+tells you *where* to start, not that you are done. Retrieval-assisted answers
+must match or exceed what plain code-path tracing produces — the consolidated
+list SEEDS the trace, it never caps it.
 
-1. **Read the span in context.** Widen the `Read` window when a span is cut
-   off mid-definition, and read the surrounding symbols it refers to.
-2. **Follow the references outward.** Chase imports, callers, callees, config
-   keys, and cross-file mentions the span surfaces — use your normal
-   navigation tools (grep, go-to-definition, reading imported modules)
-   freely. Retrieval finds an entry point; it does not replace reading the
-   code around it.
-3. **Re-query with what you learned.** A hit often reveals the exact
-   identifier or vocabulary the codebase actually uses. Feed that back into a
-   fresh `retrieval query` (or a different `--retriever`) to pull spans the
-   first wording missed. Iterate: retrieve -> read -> refine the query ->
-   retrieve again.
-4. **Stop when you can answer.** End the loop once you have read enough to
-   answer the question or make the change — not at the first hit.
+**Triage first (shallow vs deep).** For a bare locate-a-symbol ask ("where is
+X defined", "which file holds Y"), read the top span, confirm it in the live
+file, and answer — skip the phased loop. For any explanatory / how-does-X-work
+/ "trace the flow" / comprehensiveness question, run the full loop below. When
+in doubt, go deep.
 
-There is no "stop after the first read" signal here: keep exploring until the
-question is answered.
+Run these phases in order:
+
+**Phase Q — Decompose.** Break the question into 3-6 sub-aspects, e.g. entry
+point, data flow, core algorithm, edge cases / conflict handling, downstream
+consumption. Write them down; they become the coverage checklist.
+
+**Phase R — Retrieve per sub-question.** Run one `retrieval query` per
+sub-aspect (iterate, don't cram one query). Persist each with
+`--json --output <scratch>/aspect-N.json` so the seeds survive the trace.
+A hit often reveals the codebase's real vocabulary — feed that back into a
+fresh query for aspects the first wording missed.
+
+**Phase T — Trace (MANDATORY, this is where detail comes from).** For every
+seed span, do NOT stop at the snippet:
+
+1. **Read the span in the live file** — widen the `Read` window past any
+   mid-definition cut, and re-confirm it is current, not legacy/deprecated.
+2. **Follow references outward** — chase callers, callees, imports, config
+   keys, and cross-file mentions with Grep/Read. Walk the execution flow
+   end-to-end: entry point → branches → core algorithm → terminal/consumption.
+3. **Re-query with what you learned** — retrieve → read → refine → retrieve.
+
+For a broad question (≥4 independent sub-aspects or a wide codebase), you MAY
+fan out: spawn one `retrieval-tracer` subagent per sub-aspect via Task,
+passing its `aspect-N.json` seeds. Tracers return DETAILED traces (file:line
++ key snippets), which you stitch together — they do not replace your own
+synthesis. Default to sequential single-agent tracing when the question is
+narrow.
+
+**Phase C — Coverage gate (fill before you answer).** Do not write the answer
+until every box is checked:
+
+- [ ] Each sub-aspect from Phase Q has ≥1 answer with a verified `file:line`.
+- [ ] The full execution path is traced entry → exit (not just the top hit).
+- [ ] Current-vs-legacy is disambiguated for every cited span.
+- [ ] Every cited detail is verified against the live file, not the cache.
+- [ ] Cross-file references (callers/callees/config) followed ≥1 hop.
+
+If any box is unchecked → loop back to Phase R (new vocabulary) or Phase T
+(trace further). There is no "stop after the first read" signal here.
+
+**Phase S — Synthesize.** See "Presenting your answer" below.
+
+### Presenting your answer (retrieval enriches, it does not replace tracing)
+
+The consolidated list is scaffolding for *your* exploration — entry points
+and ranking hints — not the answer you hand the user. When you write the
+final answer:
+
+- **Answer in traced prose with verified `file:line` citations.** Trace the
+  actual code path from the retrieved entry points; cite lines you have
+  opened and read. Do NOT open your answer with (or paste) the raw
+  `path:start-end  [score=… agree=… conf=… via …]` table — that ranking
+  metadata is an internal relevance hint, not user-facing content.
+- **Rank and confidence are not currency or authority.** `score`, `agree`,
+  and `conf` measure how strongly retrievers matched your *query text* and
+  agreed with each other — NOT that a span is current, canonical, or
+  non-deprecated. A `conf=high` hit can point straight at legacy or
+  deprecated code that two retrievers happened to both surface.
+- **Verify each span against the live file before relying on it.** The cache
+  is a snapshot; re-read the span in the current file and confirm it is the
+  present implementation. Check for deprecation markers, newer sibling
+  definitions, and whether the symbol is still referenced before quoting it.
+- **Prefer what direct tracing finds over what retrieval ranked.** If reading
+  the code path reveals an implementation detail retrieval missed, that
+  detail wins. Retrieval points; the code decides.
 
 #### When results look noisy or low-relevance
 

@@ -49,6 +49,11 @@ zero-dependency `LexicalRetriever`, via the `retrieval` console-script CLI
 contextualization before indexing, see the `remote` extra synced by setup,
 plus the `lexical-retrieval-usage` / `hybrid-retrieval-usage` skills.
 
+For explanatory/comprehensiveness questions, the skill's answer path runs the
+phased deep-answer workflow (Q → R → T → C → S, Step 3 of
+`skills/retrieval/SKILL.md`) rather than stopping at the first hit — this
+command remains a thin dispatcher into that skill.
+
 `setup` runs `uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all`
 (see `skills/retrieval/SKILL.md` Step 1).
 

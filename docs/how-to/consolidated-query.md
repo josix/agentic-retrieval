@@ -4,8 +4,9 @@
 available strategy in `_DEFAULT_INDEX_SET` (`lexical`, `turbovec`,
 `pi-serini`, `hybrid`, `treesitter`), consolidates their per-retriever
 rankings into a single deduplicated, ranked, and explainable list, and
-prints (or writes) that list — a handoff a following conversation/agent can
-act on directly, without re-deriving agreement/provenance itself. Any
+prints (or writes) that list — a ranked set of entry points a following
+conversation/agent explores and verifies from, without re-deriving
+agreement/provenance itself. Any
 strategy whose optional extras aren't installed is skipped, not a hard
 failure; the run still exits `0` as long as `lexical` (the always-available
 baseline) consolidates successfully.
@@ -53,6 +54,11 @@ retrieval/consolidation.py:120-160  [score=0.0328 agree=3/5 conf=high  via hybri
   `turbovec` or `pi-serini` — found it alone), or `low` (a single other arm
   found it alone).
 - `via a,b,c` — the contributing retriever names (provenance), sorted.
+
+Confidence and score reflect retriever agreement on your query text, not
+whether the code is current or authoritative — verify a span against the
+live file (and check for deprecation) before quoting it. Treat this list as
+scaffolding for exploration, not a finished answer.
 
 Skip notes (e.g. `turbovec: skipped (...)`) print to **stderr**, never
 stdout, so stdout stays a clean ranked list either way.
@@ -107,6 +113,12 @@ makes an LLM call. Once a following agent has the consolidated list, it may
 RankGPT-style "read the query plus the top-N snippets, ask the model to
 re-order them") before acting — that is agent-side judgment on top of the
 handoff, not an engine feature. See `skills/retrieval/SKILL.md` Step 3.
+
+The recommended follow-up is the phased Q → R → T → C → S deep-answer
+workflow documented in `skills/retrieval/SKILL.md` Step 3 (Decompose →
+Retrieve per sub-question → Trace → Coverage gate → Synthesize): the
+`--output` envelope above is exactly the per-sub-question seed carrier that
+workflow's Phase R persists and Phase T traces from.
 
 ## Next steps
 

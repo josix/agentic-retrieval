@@ -69,6 +69,25 @@ PY
 Or drive the `retrieval.retrievers` API directly — see
 [Use each retriever](use-each-retriever.md).
 
+## Deep answers with non-Claude agents
+
+The same phased deep-answer workflow the `retrieval` skill's Step 3 defines
+(Q → R → T → C → S) works with only the CLI — no Claude plugin machinery
+required:
+
+1. **Decompose** the question into 3-6 sub-aspects (entry point, data flow,
+   core algorithm, edge cases, downstream consumption).
+2. **Retrieve** once per sub-aspect: `retrieval query "<sub-question>" --root
+   <path-to-project> --json --output <scratch>/aspect-N.json`. Persisting each
+   sub-aspect's seeds separately keeps them from being lost mid-trace.
+3. **Trace** every seed span with your own agent's read/grep tools: open the
+   span in the live file, follow callers/callees/imports/config outward, and
+   re-query with vocabulary a hit reveals.
+4. **Coverage-check** before answering: every sub-aspect has a verified
+   `file:line`, the execution path is traced entry to exit, and every cited
+   span has been checked against the live file (not just the cache). Loop
+   back to step 2 or 3 if any of that is missing.
+
 ## Environment variable contract
 
 Two environment variables the skills read, if your agent harness sets them:
