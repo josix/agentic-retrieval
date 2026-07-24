@@ -54,15 +54,42 @@ class TestCollectSignalsCode(unittest.TestCase):
             self.assertEqual(params["code_chars"], 1200)
 
 
+class TestResolveParamsLucene(unittest.TestCase):
+    """lucene_k1/lucene_b are always explicitly derived (never omitted),
+    even though today's chunkers never produce a chunk long enough to hit
+    the long-document branch."""
+
+    def test_short_median_chunk_yields_ms_marco_tuning(self) -> None:
+        signals = CorpusSignals(n_files=5, code_fraction=0.1, p50_chunk_tokens=100.0)
+        params = resolve_params(signals)
+        self.assertEqual(params["lucene_k1"], 0.9)
+        self.assertEqual(params["lucene_b"], 0.4)
+
+    def test_unknown_median_chunk_falls_back_to_ms_marco_tuning(self) -> None:
+        params = resolve_params(CorpusSignals(n_files=0))
+        self.assertEqual(params["lucene_k1"], 0.9)
+        self.assertEqual(params["lucene_b"], 0.4)
+
+    def test_long_median_chunk_yields_long_document_tuning(self) -> None:
+        signals = CorpusSignals(n_files=5, code_fraction=0.1, p50_chunk_tokens=2500.0)
+        params = resolve_params(signals)
+        self.assertEqual(params["lucene_k1"], 25.0)
+        self.assertEqual(params["lucene_b"], 1.0)
+
+
 class TestResolveParamsBFormula(unittest.TestCase):
     """The bm25_b heuristic reads chunk_token_cv/p50/p90 — exercised
     directly on synthetic CorpusSignals rather than through real chunking."""
 
     def _signals(self, cv: float, p50: float, p90: float) -> CorpusSignals:
         return CorpusSignals(
-            n_files=5, code_fraction=0.1, n_chunks=20,
-            mean_chunk_tokens=100.0, chunk_token_cv=cv,
-            p50_chunk_tokens=p50, p90_chunk_tokens=p90,
+            n_files=5,
+            code_fraction=0.1,
+            n_chunks=20,
+            mean_chunk_tokens=100.0,
+            chunk_token_cv=cv,
+            p50_chunk_tokens=p50,
+            p90_chunk_tokens=p90,
         )
 
     def test_low_cv_yields_low_b(self) -> None:

@@ -30,7 +30,7 @@ import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from retrieval import project_loader
 from retrieval.ast_chunker import LANGUAGE_BY_SUFFIX
@@ -78,7 +78,9 @@ def _decide_tokenizer(code_fraction: float) -> str:
     return "code" if code_fraction > 0.3 else "plain"
 
 
-def _decide_chunking_policy(code_fraction: float, median_code_lines: Optional[float]) -> ChunkingPolicy:
+def _decide_chunking_policy(
+    code_fraction: float, median_code_lines: Optional[float]
+) -> ChunkingPolicy:
     code_chars = 1200 if code_fraction > 0.3 else 400
     ast_max_chars = 1200 if median_code_lines is None or median_code_lines <= 400 else 2000
     return ChunkingPolicy(
@@ -131,6 +133,24 @@ def _decide_bit_width(n_chunks: Optional[int]) -> int:
     if total <= 5e8:
         return 3
     return 2
+
+
+def _decide_lucene_params(median_chunk_tokens: Optional[float]) -> Tuple[float, float]:
+    """Pi-serini (Lucene BM25) ``k1``/``b``, chosen by median chunk length
+    in tokens: MS MARCO passage tuning (``0.9``/``0.4``) for short units
+    (median <=2000 tokens, including an unknown/empty-corpus median), else
+    the long-document tuning (``25``/``1``) meant for >2000-token units.
+
+    Today this always resolves to ``0.9``/``0.4``: this engine's chunkers
+    cap chunk size around 1200 characters (~1200 tokens at most, well
+    under the 2000-token threshold), so the long-document branch is
+    presently unreachable — recorded explicitly here (rather than omitted
+    from ``resolve_params``) so that decision is visible in persisted meta
+    instead of silently defaulting inside ``PiSeriniRetriever``.
+    """
+    if median_chunk_tokens is not None and median_chunk_tokens > 2000:
+        return 25.0, 1.0
+    return 0.9, 0.4
 
 
 def resolve_top_k(corpus_stats: Optional[Dict[str, Any]]) -> int:
@@ -228,6 +248,7 @@ def resolve_params(
     Deterministic: two calls with the same *signals* return equal dicts.
     """
     policy = _decide_chunking_policy(signals.code_fraction, signals.median_code_lines)
+    lucene_k1, lucene_b = _decide_lucene_params(signals.p50_chunk_tokens)
     params: Dict[str, Any] = {
         **policy.to_dict(),
         "tokenizer": _decide_tokenizer(signals.code_fraction),
@@ -236,6 +257,8 @@ def resolve_params(
             signals.chunk_token_cv, signals.p50_chunk_tokens, signals.p90_chunk_tokens
         ),
         "bit_width": _decide_bit_width(signals.n_chunks),
+        "lucene_k1": lucene_k1,
+        "lucene_b": lucene_b,
     }
     if overrides:
         for key, value in overrides.items():

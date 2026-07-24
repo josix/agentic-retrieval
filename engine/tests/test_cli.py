@@ -524,6 +524,44 @@ class TestCli(unittest.TestCase):
         data = json.loads((directory / "lexical.json").read_text(encoding="utf-8"))
         self.assertEqual(data["bm25"]["k1"], 1.9)
 
+    def test_stale_rebuild_via_query_preserves_persisted_hyperparams(self) -> None:
+        # Index with explicit, non-default hyperparameters.
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical",
+             "--bm25-k1", "1.9", "--tokenizer", "code"]
+        )
+        self.assertEqual(code, 0)
+        meta_path = index_dir(self.root) / "meta.json"
+        first_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(first_meta["hyperparams"]["bm25_k1"], 1.9)
+        self.assertEqual(first_meta["hyperparams"]["tokenizer"], "code")
+
+        # Dirty the corpus fingerprint (new file), then query with NO flags —
+        # this must trigger a query-side rebuild (not a fresh `index` run).
+        new_file = self.root / "c.txt"
+        _write(new_file, "asteroid belt lies between mars and jupiter")
+        _bump_mtime(new_file)
+
+        code, out = _run(
+            ["query", "asteroid belt mars jupiter",
+             "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "c.txt:1-1")
+
+        # The rebuilt cache must still carry the original, explicitly-set
+        # hyperparameters — not silently reverted to static defaults
+        # (k1=1.5, tokenizer=plain) just because the query itself passed no
+        # hyperparameter flags.
+        rebuilt_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertEqual(rebuilt_meta["hyperparams"]["bm25_k1"], 1.9)
+        self.assertEqual(rebuilt_meta["hyperparams"]["tokenizer"], "code")
+        rebuilt_data = json.loads(
+            (index_dir(self.root) / "lexical.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(rebuilt_data["bm25"]["k1"], 1.9)
+        self.assertEqual(rebuilt_data["bm25"]["tokenizer"], "code")
+
     def test_auto_index_then_plain_query_reuses_persisted_tokenizer(self) -> None:
         code, out = _run(["index", "--root", str(self.root), "--retriever", "lexical", "--auto"])
         self.assertEqual(code, 0)

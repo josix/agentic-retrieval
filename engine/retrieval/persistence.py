@@ -39,6 +39,7 @@ each unit))``) — the two will usually differ once a file yields more than
 one chunk.
 """
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -46,6 +47,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from retrieval.chunker import ChunkingPolicy
 from retrieval.project_loader import discover_files
 from retrieval.retrievers import (
     HybridRetriever,
@@ -68,12 +70,10 @@ _FROZENSET_LOADER_KEYS = frozenset({"extensions", "exclude_dirs", "include_basen
 
 #: Chunking-policy keys that affect every retriever's indexed text (not just
 #: one retriever family), so they're always included in ``relevant_params``
-#: regardless of a retriever class's own ``ACCEPTS``. Named directly here
-#: (rather than imported from ``retrieval.chunker.ChunkingPolicy``) since
-#: that dataclass doesn't exist until it's added alongside autotune.
-_CHUNKING_PARAM_KEYS = frozenset(
-    {"prose_chars", "config_chars", "code_chars", "default_chars", "ast_max_chars"}
-)
+#: regardless of a retriever class's own ``ACCEPTS``. Derived from
+#: ``retrieval.chunker.ChunkingPolicy``'s own field names, so the two never
+#: drift apart.
+_CHUNKING_PARAM_KEYS = frozenset(f.name for f in dataclasses.fields(ChunkingPolicy))
 
 _LEXICAL_FILENAME = "lexical.json"
 _META_FILENAME = "meta.json"
@@ -335,4 +335,5 @@ def is_stale(
         return False
     retriever_name = meta.get("retriever_name", "lexical")
     relevant = relevant_params(retriever_name, params)
-    return json.dumps(relevant, sort_keys=True) != json.dumps(meta.get("hyperparams"), sort_keys=True)
+    persisted = meta.get("hyperparams")
+    return json.dumps(relevant, sort_keys=True) != json.dumps(persisted, sort_keys=True)

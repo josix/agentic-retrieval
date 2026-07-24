@@ -389,16 +389,79 @@ def _cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _peek_meta(root: Path, retriever_name: str) -> Optional[Dict[str, Any]]:
+    """Best-effort meta lookup that survives a corrupt/incompatible data
+    file: ``cached_retrievers`` only ever reads meta.json (never the
+    heavier data file ``load_index`` also requires and can fail on), so it
+    can still recover a previous run's recorded hyperparameters even when
+    ``load_index`` itself returns ``None``."""
+    cached = cached_retrievers(root)
+    if retriever_name in cached:
+        return cached[retriever_name]
+    if retriever_name in ("lexical", "lexical+ctx"):
+        # Shared cache slot: whichever of the two built it last is keyed
+        # under its own name in cached_retrievers, not necessarily the one
+        # being asked about here.
+        return cached.get("lexical") or cached.get("lexical+ctx")
+    return None
+
+
+def _params_for_rebuild(
+    root: Path,
+    retriever_name: str,
+    params: Optional[Dict[str, Any]],
+    meta: Optional[Dict[str, Any]] = None,
+) -> "tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[ChunkingPolicy]]":
+    """Resolve ``(params, corpus_stats, policy)`` to rebuild with.
+
+    Explicit *params* (the caller asked for specific hyperparameters) always
+    wins. Otherwise — the common case: a plain ``query``/``_load_or_rebuild``
+    call with no --auto/hyperparameter flags — recover the index's own
+    previously recorded ``meta["hyperparams"]``/``meta["corpus_stats"]``
+    (from *meta*, or a best-effort ``_peek_meta`` lookup when *meta* wasn't
+    already loaded, e.g. the ``load_index`` returned ``None`` path) so a
+    query-triggered rebuild never silently reverts to static defaults.
+    Falls back to ``(None, None, None)`` only when no meta is readable at
+    all (nothing to recover from).
+    """
+    if params is not None:
+        return params, None, ChunkingPolicy.from_dict(params)
+    if meta is None:
+        meta = _peek_meta(root, retriever_name)
+    if meta is None:
+        return None, None, None
+    hyperparams = meta.get("hyperparams")
+    policy = ChunkingPolicy.from_dict(hyperparams) if hyperparams else None
+    return hyperparams, meta.get("corpus_stats"), policy
+
+
 def _load_or_rebuild(
     root: Path, retriever_name: str, stale_ok: bool, params: Optional[Dict[str, Any]] = None
 ) -> Retriever:
-    """Load the cached retriever for *root*, rebuilding it if missing/stale."""
+    """Load the cached retriever for *root*, rebuilding it if missing/stale.
+
+    A rebuild (whether triggered by no cache at all or by a stale
+    fingerprint/hyperparams) preserves the index's own previously recorded
+    hyperparameters — see ``_params_for_rebuild`` — rather than silently
+    reverting to static defaults just because the caller didn't pass
+    explicit *params*.
+    """
     cached = load_index(root, retriever_name)
     if cached is None:
-        return _build_and_save(root, retriever_name, params)
+        rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
+            root, retriever_name, params
+        )
+        return _build_and_save(
+            root, retriever_name, rebuild_params, rebuild_corpus_stats, rebuild_policy
+        )
     retriever, meta = cached
     if is_stale(root, meta, params=params) and not stale_ok:
-        return _build_and_save(root, retriever_name, params)
+        rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
+            root, retriever_name, params, meta
+        )
+        return _build_and_save(
+            root, retriever_name, rebuild_params, rebuild_corpus_stats, rebuild_policy
+        )
     return retriever
 
 
