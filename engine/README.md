@@ -17,7 +17,7 @@ the parent repository: https://github.com/josix/agentic-retrieval
 From a built wheel or sdist:
 
 ```bash
-uv pip install agentic_retrieval-0.4.0-py3-none-any.whl
+uv pip install agentic_retrieval-<version>-py3-none-any.whl
 ```
 
 Directly from GitHub (no local checkout needed), using the `engine/`

@@ -110,7 +110,7 @@ staleness, and on-disk location:
 root: /Users/you/project
 docs: 42
 created: 2026-07-13T10:00:00Z
-engine: 0.2.0
+engine: <engine version>
 stale: False
 cache: /Users/you/project/.agentic-retrieval
 ```

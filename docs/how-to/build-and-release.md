@@ -9,13 +9,13 @@ The engine (`engine/`) is a standard `hatchling`-backed Python package
 cd engine && uv build
 ```
 
-This produces `engine/dist/agentic_retrieval-0.4.0-py3-none-any.whl` and the
+This produces `engine/dist/agentic_retrieval-<version>-py3-none-any.whl` and the
 matching `.tar.gz` sdist (gitignored — build artifacts, not checked in).
 
 ## Install the built wheel directly
 
 ```bash
-uv pip install ./engine/dist/agentic_retrieval-0.4.0-py3-none-any.whl
+uv pip install ./engine/dist/agentic_retrieval-*.whl
 ```
 
 The wheel registers a `retrieval` console script
@@ -45,6 +45,30 @@ With optional extras:
 ```bash
 uv pip install "agentic-retrieval[all] @ git+https://github.com/josix/agentic-retrieval.git#subdirectory=engine"
 ```
+
+## Version bump checklist
+
+The plugin and the engine are versioned in lockstep. Bump all four declaration
+sites in a single commit — `engine/tests/test_version.py` fails CI if any
+of them drift apart, or if `docs/changelog.md` has no section for the new
+version.
+
+1. `.claude-plugin/plugin.json` — `version`
+2. `.claude-plugin/marketplace.json` — the `agentic-retrieval` entry's `version`
+3. `engine/pyproject.toml` — `[project] version`
+4. `engine/retrieval/__init__.py` — `__version__` (the only site with runtime
+   consumers: it is written into each cache's `meta.json` as `engine_version`
+   and shown by `retrieval stats` and `retrieval --version`)
+
+Then:
+
+5. Regenerate the lockfile: `uv lock --directory engine`. Never hand-edit
+   `engine/uv.lock`.
+6. Rename `docs/changelog.md`'s `## Unreleased` section to
+   `## <version> — <YYYY-MM-DD>` and open a fresh empty `## Unreleased`
+   above it.
+7. Tag and push: `git tag v<version> && git push origin v<version>` — this
+   is what triggers the release workflow below.
 
 ## Release workflow
 
