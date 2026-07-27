@@ -2,7 +2,7 @@
 
 import unittest
 
-from retrieval.fusion import reciprocal_rank_fusion
+from retrieval.fusion import candidate_pool, reciprocal_rank_fusion
 
 
 class TestReciprocalRankFusion(unittest.TestCase):
@@ -43,6 +43,20 @@ class TestReciprocalRankFusion(unittest.TestCase):
     def test_single_list_preserves_relative_order(self) -> None:
         fused = reciprocal_rank_fusion([[5, 2, 9]])
         self.assertEqual([idx for idx, _score in fused], [5, 2, 9])
+
+
+class TestCandidatePool(unittest.TestCase):
+    def test_floor_applies_for_small_top_k(self) -> None:
+        self.assertEqual(candidate_pool(5), 50)
+
+    def test_capped_by_n_units(self) -> None:
+        self.assertEqual(candidate_pool(5, 20), 20)
+
+    def test_multiplier_applies_above_the_floor(self) -> None:
+        self.assertEqual(candidate_pool(10), 100)
+
+    def test_n_units_above_pool_does_not_cap(self) -> None:
+        self.assertEqual(candidate_pool(10, 1000), 100)
 
 
 if __name__ == "__main__":

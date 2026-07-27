@@ -10,6 +10,13 @@ backed by Pyserini/Anserini — the reference lexical retriever from
 [pi-serini](https://github.com/justram/pi-serini) ("Rethinking Agentic Search
 with Pi-Serini: Is Lexical Retrieval Sufficient?").
 
+`pi-serini` and `pyserini` are two different names, and neither is a typo
+for the other: `pi-serini` is the retrieval *strategy* from the paper above
+(and this plugin's registry key / `--retriever` value), while `pyserini` is
+the Castorini Python library — and this repo's install extra — that the
+strategy is implemented on top of. Wherever both appear on the same line
+below, the difference is deliberate.
+
 ## What it is
 
 `PiSeriniRetriever` builds an in-memory Lucene inverted index
@@ -109,6 +116,11 @@ hit.start_line + 1)`. Treat that span as a seed to read and explore from, not
 the final answer — follow the references it surfaces outward and re-query
 with the vocabulary a hit reveals; if the top spans look noisy, re-query,
 switch retriever, or raise `--top-k` (see the `retrieval` skill's Step 3).
+Present your final answer as traced prose with verified `file:line`
+citations — never lead with the raw ranked list, and confirm each span
+against the current file first: a high rank/confidence reflects query-text
+match and retriever agreement, not that the code is current or
+non-deprecated.
 
 Or via the registry: `from retrieval.retrievers import build_retriever;
 build_retriever("pi-serini")`.

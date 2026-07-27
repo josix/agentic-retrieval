@@ -14,7 +14,7 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from retrieval.chunker import chunk_document  # noqa: E402
+from retrieval.chunker import ChunkingPolicy, chunk_document  # noqa: E402
 
 
 class TestChunkDocumentSpans(unittest.TestCase):
@@ -115,6 +115,44 @@ class TestChunkDocumentEdgeCases(unittest.TestCase):
         # second paragraph is line 6; must not reach back to the heading line.
         self.assertEqual(second.start_line, 6)
         self.assertEqual(second.end_line, 6)
+
+
+class TestChunkingPolicy(unittest.TestCase):
+    def test_default_policy_is_flat_400_everywhere(self) -> None:
+        policy = ChunkingPolicy()
+        for path in ("README.md", "config.yaml", "src/app.py", "notes.log"):
+            self.assertEqual(policy.target_chars_for(path), 400)
+
+    def test_target_chars_for_prose(self) -> None:
+        policy = ChunkingPolicy(prose_chars=999)
+        for path in ("README.md", "doc.markdown", "notes.rst", "plain.txt"):
+            self.assertEqual(policy.target_chars_for(path), 999)
+
+    def test_target_chars_for_config(self) -> None:
+        policy = ChunkingPolicy(config_chars=777)
+        for path in ("a.yaml", "b.yml", "pyproject.toml", "c.ini", "d.cfg", "e.json"):
+            self.assertEqual(policy.target_chars_for(path), 777)
+
+    def test_target_chars_for_code(self) -> None:
+        policy = ChunkingPolicy(code_chars=1234)
+        self.assertEqual(policy.target_chars_for("src/app.py"), 1234)
+        self.assertEqual(policy.target_chars_for("lib/thing.rs"), 1234)
+
+    def test_target_chars_for_default_bucket(self) -> None:
+        policy = ChunkingPolicy(default_chars=111)
+        self.assertEqual(policy.target_chars_for("data.bin"), 111)
+        self.assertEqual(policy.target_chars_for("no_extension"), 111)
+
+    def test_to_dict_from_dict_round_trip(self) -> None:
+        policy = ChunkingPolicy(
+            prose_chars=1, config_chars=2, code_chars=3, default_chars=4, ast_max_chars=5
+        )
+        restored = ChunkingPolicy.from_dict(policy.to_dict())
+        self.assertEqual(restored, policy)
+
+    def test_from_dict_missing_keys_use_dataclass_defaults(self) -> None:
+        restored = ChunkingPolicy.from_dict({"code_chars": 900})
+        self.assertEqual(restored, ChunkingPolicy(code_chars=900))
 
 
 if __name__ == "__main__":

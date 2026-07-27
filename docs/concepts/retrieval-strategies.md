@@ -36,6 +36,45 @@ Repeated with the fusion and contextualization rows:
 | Sparse retrieval keeps missing a document for lack of shared vocabulary, but standing up dense/Lucene isn't worth it | Contextualize at index time instead |
 | Any optional backend raises `RuntimeError` | Fall back to plain `lexical` |
 
+## The pi-serini method
+
+The `pi-serini` strategy reproduces the reference lexical retriever from
+the Pi-Serini paper:
+
+> Tz-Huan Hsu, Jheng-Hong Yang, and Jimmy Lin. *Rethinking Agentic Search
+> with Pi-Serini: Is Lexical Retrieval Sufficient?* arXiv:2605.10848, 2026.
+> <https://arxiv.org/abs/2605.10848> — code:
+> <https://github.com/justram/pi-serini>
+
+The paper asks whether dense (embedding-based) retrieval is still needed
+for agentic deep research now that LLM agents reason and use tools well.
+Its answer: a well-configured lexical (BM25) retriever with **sufficient
+retrieval depth** is enough. Dense retrieval exists mostly to close the
+vocabulary gap between query and document wording; Pi-Serini's reframing
+is that the retriever no longer has to solve that gap — retrieve deeper
+and let a capable LLM agent compensate by reading more candidates. The
+system itself is a search agent with three tools (BM25 document retrieval
+over a Lucene inverted index via the Pyserini library, web browsing, and
+document reading) — no embedding model, no GPU, no vector index.
+
+On the BrowseComp-Plus benchmark, Pi-Serini paired with a frontier LLM
+reached 83.1% answer accuracy and 94.7% surfaced-evidence recall,
+surpassing released search agents built on dense retrievers. Ablations
+show neither ingredient is optional: BM25 parameter tuning alone added
+18.0% accuracy and 11.1% evidence recall, and deeper retrieval added
+25.3% evidence recall.
+
+The tuning is far from BM25's textbook settings: `k1=25` (vs. Lucene's
+usual ~0.9) nearly disables term-frequency saturation so repeated query
+terms keep accumulating score, and `b=1` applies full document-length
+normalization — both tuned for the benchmark's long (~5,000-word)
+documents. This repo's `PiSeriniRetriever` defaults to Pyserini's
+general-purpose `k1=0.9, b=0.4`; pass `k1=25, b=1` to reproduce the
+paper's setup. The trade-off is unchanged at its core: BM25 remains a
+token matcher, so the method's answer to vocabulary mismatch is "retrieve
+deeper," not "match on meaning" — see the selection tables above for when
+`turbovec` or hybrid fusion fits better.
+
 ## Graceful degradation rationale
 
 The `lexical` strategy is the zero-dependency baseline: it always runs when

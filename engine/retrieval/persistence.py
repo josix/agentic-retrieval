@@ -3,9 +3,12 @@
 Stdlib-only (``json``, ``hashlib``, ``os``, ``pathlib``, ``time``) — each
 retriever's cache is a pair of JSON files (data + meta, e.g. ``lexical.json``
 + ``meta.json`` for the lexical family, ``hybrid.json`` + ``hybrid.meta.json``
-for hybrid) under a per-project directory derived from the resolved, absolute
-project root path, so different projects (and different checkouts of the same
-repo) never collide — and different retrievers for the same project coexist.
+for hybrid) under a per-project directory. By default that directory is
+``<project-root>/.agentic-retrieval`` (excluded from discovery by name); if
+``RETRIEVAL_INDEX_DIR`` is set, caches instead live under
+``<override>/<project_key>``, derived from the resolved, absolute project
+root path, so different projects (and different checkouts of the same repo)
+never collide — and different retrievers for the same project coexist.
 
 The ``pi-serini`` retriever additionally keeps its binary Lucene segments in
 a ``lucene/`` subdirectory of the same per-project cache dir; its JSON file
@@ -21,10 +24,11 @@ crash mid-write never leaves a half-written cache file for a future
 ``load_index`` to trip over.
 
 Warning: if ``RETRIEVAL_INDEX_DIR`` is pointed *inside* the indexed project
-root, the cache's ``lexical.json``/``meta.json`` get swept up as documents
-on the next index/query run (a feedback loop) — only a directory literally
-named ``.cache`` is excluded by default, so any other cache dirname is
-fair game for re-indexing.
+root using a directory name other than ``.agentic-retrieval``, the cache's
+``lexical.json``/``meta.json`` get swept up as documents on the next
+index/query run (a feedback loop) — only ``.agentic-retrieval`` (the
+in-root default's name) is excluded by default, so any other cache dirname
+is fair game for re-indexing.
 
 Since retrievers now index chunk-granularity Documents (see
 ``retrieval.project_loader.load_chunk_documents``), a meta file's
@@ -35,6 +39,7 @@ each unit))``) — the two will usually differ once a file yields more than
 one chunk.
 """
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -42,6 +47,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from retrieval.chunker import ChunkingPolicy
 from retrieval.project_loader import discover_files
 from retrieval.retrievers import (
     HybridRetriever,
@@ -52,9 +58,22 @@ from retrieval.retrievers import (
     TurbovecRetriever,
 )
 
-#: Default on-disk location for the index cache; overridable via
-#: ``RETRIEVAL_INDEX_DIR`` (see ``cache_base_dir``).
-DEFAULT_BASE = Path.home() / ".cache" / "agentic-retrieval" / "indexes"
+#: Name of the per-project cache directory created under the project root
+#: by default; also excluded from file discovery (see ``project_loader``)
+#: so it never feeds back into an index/query run.
+CACHE_DIRNAME = ".agentic-retrieval"
+
+#: Loader kwargs whose persisted (JSON-list) form must be rehydrated back
+#: into a frozenset before being passed to ``discover_files``/
+#: ``compute_fingerprint`` — those three accept only frozensets.
+_FROZENSET_LOADER_KEYS = frozenset({"extensions", "exclude_dirs", "include_basenames"})
+
+#: Chunking-policy keys that affect every retriever's indexed text (not just
+#: one retriever family), so they're always included in ``relevant_params``
+#: regardless of a retriever class's own ``ACCEPTS``. Derived from
+#: ``retrieval.chunker.ChunkingPolicy``'s own field names, so the two never
+#: drift apart.
+_CHUNKING_PARAM_KEYS = frozenset(f.name for f in dataclasses.fields(ChunkingPolicy))
 
 _LEXICAL_FILENAME = "lexical.json"
 _META_FILENAME = "meta.json"
@@ -83,16 +102,17 @@ def _layout(retriever_name: str) -> Tuple[str, str, Any]:
         ) from None
 
 
-def cache_base_dir() -> Path:
-    """Return the base directory all project index caches live under.
+def cache_base_dir() -> Optional[Path]:
+    """Return the shared base directory index caches live under, if overridden.
 
-    Honors the ``RETRIEVAL_INDEX_DIR`` environment variable override; falls
-    back to ``DEFAULT_BASE``.
+    Honors the ``RETRIEVAL_INDEX_DIR`` environment variable; returns ``None``
+    when unset, meaning "use the per-project in-root default"
+    (``<project-root>/.agentic-retrieval``) instead of a shared base dir.
     """
     override = os.environ.get("RETRIEVAL_INDEX_DIR")
     if override:
         return Path(override)
-    return DEFAULT_BASE
+    return None
 
 
 def project_key(root: "os.PathLike[str] | str") -> str:
@@ -107,8 +127,16 @@ def project_key(root: "os.PathLike[str] | str") -> str:
 
 
 def index_dir(root: "os.PathLike[str] | str") -> Path:
-    """Return the per-project cache directory for *root* (may not exist yet)."""
-    return cache_base_dir() / project_key(root)
+    """Return the per-project cache directory for *root* (may not exist yet).
+
+    When ``RETRIEVAL_INDEX_DIR`` is set, caches live under
+    ``<override>/<project_key(root)>`` (a shared base dir keyed by hash).
+    Otherwise they live under ``<project-root>/.agentic-retrieval``.
+    """
+    base = cache_base_dir()
+    if base is not None:
+        return base / project_key(root)
+    return Path(root).resolve() / CACHE_DIRNAME
 
 
 def compute_fingerprint(root: "os.PathLike[str] | str", **loader_kw: Any) -> str:
@@ -135,12 +163,56 @@ def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
     os.replace(tmp_path, path)
 
 
+def relevant_params(retriever_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the subset of *params* that actually affects *retriever_name*.
+
+    Intersects *params* with the retriever class's own ``ACCEPTS`` (defaults
+    to an empty set for retrievers that don't declare one yet) plus the
+    chunking-policy keys, which affect every retriever's indexed text
+    regardless of family.
+    """
+    _data_filename, _meta_filename, cls = _layout(retriever_name)
+    accepts = getattr(cls, "ACCEPTS", frozenset())
+    keys = accepts | _CHUNKING_PARAM_KEYS
+    return {k: v for k, v in params.items() if k in keys}
+
+
+def _serializable_loader_kw(loader_kw: Dict[str, Any]) -> Dict[str, Any]:
+    """JSON-safe form of a loader-kwargs dict: frozensets/sets become sorted
+    lists (restored back into frozensets by ``_loader_kw_from_meta``)."""
+    result: Dict[str, Any] = {}
+    for key, value in loader_kw.items():
+        if isinstance(value, (frozenset, set)):
+            result[key] = sorted(value)
+        else:
+            result[key] = value
+    return result
+
+
+def _loader_kw_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Rehydrate a meta's persisted ``loader_kw`` block back into the kwargs
+    ``discover_files``/``compute_fingerprint`` expect (frozensets for the
+    keys that need them)."""
+    loader_kw = meta.get("loader_kw") or {}
+    result: Dict[str, Any] = {}
+    for key, value in loader_kw.items():
+        if key in _FROZENSET_LOADER_KEYS and isinstance(value, list):
+            result[key] = frozenset(value)
+        else:
+            result[key] = value
+    return result
+
+
 def save_index(
     retriever: Retriever,
     root: "os.PathLike[str] | str",
     fingerprint: str,
     retriever_name: str,
     engine_version: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    corpus_stats: Optional[Dict[str, Any]] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Persist a fitted *retriever* + metadata for *root*, atomically.
 
@@ -149,6 +221,14 @@ def save_index(
     into ``index_dir(root)``, creating the directory if needed; filenames are
     per-retriever (see ``_CACHE_LAYOUT``), so different retrievers' caches
     for the same root coexist. Returns the directory written to.
+
+    When *params* is given, the meta gains a ``"hyperparams"`` block —
+    the subset of *params* relevant to *retriever_name* (see
+    ``relevant_params``) — used by ``is_stale`` to detect a hyperparameter
+    change even when the corpus fingerprint hasn't moved. *corpus_stats* and
+    *loader_kw* are recorded verbatim (JSON-safe-ified) when given; all three
+    are omitted from the meta entirely when not supplied, preserving today's
+    meta shape for callers that don't pass them.
     """
     data_filename, meta_filename, _cls = _layout(retriever_name)
     directory = index_dir(root)
@@ -168,6 +248,12 @@ def save_index(
         "file_count": file_count,
         "retriever_name": retriever_name,
     }
+    if params is not None:
+        meta["hyperparams"] = relevant_params(retriever_name, params)
+    if corpus_stats is not None:
+        meta["corpus_stats"] = corpus_stats
+    if loader_kw is not None:
+        meta["loader_kw"] = _serializable_loader_kw(loader_kw)
     _atomic_write_json(directory / meta_filename, meta)
 
     return directory
@@ -219,6 +305,35 @@ def cached_retrievers(root: "os.PathLike[str] | str") -> Dict[str, Dict[str, Any
     return found
 
 
-def is_stale(root: "os.PathLike[str] | str", meta: Dict[str, Any], **loader_kw: Any) -> bool:
-    """Return True if *root*'s current fingerprint differs from *meta*'s."""
-    return compute_fingerprint(root, **loader_kw) != meta.get("fingerprint")
+def is_stale(
+    root: "os.PathLike[str] | str",
+    meta: Dict[str, Any],
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    **loader_kw: Any,
+) -> bool:
+    """Return True if *root* + *meta* should be rebuilt.
+
+    True when the current fingerprint differs from *meta*'s, OR (when
+    *params* is given) the relevant subset of *params* for *meta*'s
+    retriever differs from *meta*'s persisted ``"hyperparams"`` (compared as
+    ``json.dumps(..., sort_keys=True)`` strings, so key order never causes a
+    false positive). *params* being ``None`` (the default) preserves today's
+    fingerprint-only behavior. A pre-upgrade meta with no ``"hyperparams"``
+    key is always considered stale under any non-``None`` *params*, forcing
+    a one-time rebuild that then records the block going forward.
+
+    Explicit *loader_kw* takes precedence for fingerprinting; otherwise the
+    loader kwargs are rehydrated from *meta*'s persisted ``"loader_kw"``
+    block (see ``_loader_kw_from_meta``), falling back to ``discover_files``'
+    own defaults when neither is available.
+    """
+    resolved_loader_kw = loader_kw if loader_kw else _loader_kw_from_meta(meta)
+    if compute_fingerprint(root, **resolved_loader_kw) != meta.get("fingerprint"):
+        return True
+    if params is None:
+        return False
+    retriever_name = meta.get("retriever_name", "lexical")
+    relevant = relevant_params(retriever_name, params)
+    persisted = meta.get("hyperparams")
+    return json.dumps(relevant, sort_keys=True) != json.dumps(persisted, sort_keys=True)

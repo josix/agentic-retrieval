@@ -34,7 +34,7 @@ jobs:
     if: false
     environment:
       name: pypi
-      url: https://pypi.org/p/rag-retrieval
+      url: https://pypi.org/p/agentic-retrieval
     permissions:
       id-token: write
     steps:

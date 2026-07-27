@@ -82,6 +82,10 @@ Lucene BM25 via Pyserini/Anserini — the reference lexical retriever from the
 pi-serini paper. Use it for Lucene-grade BM25 at scale, or to reproduce the
 paper's `k1=25, b=1` tuning for long documents.
 
+The near-identical names are intentional: `pi-serini` is the strategy and
+registry key (from the Pi-Serini paper), `pyserini` is the Castorini
+library and install extra it runs on.
+
 Setup: synced by the full sync, which needs a Java 21 JDK on `PATH` in
 addition to the pip install. If the `pyserini` extra was skipped (or synced
 without a JDK present), re-run after installing Java 21:

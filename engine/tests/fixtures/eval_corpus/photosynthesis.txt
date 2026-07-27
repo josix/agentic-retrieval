@@ -1,0 +1,16 @@
+Plant Energy Conversion
+
+Overview:
+Green organisms capture radiant energy from the sun and store it as chemical bonds inside sugar molecules.
+
+Light Reactions:
+Pigments in the thylakoid membrane absorb photons and split water, releasing oxygen as a byproduct.
+
+Calvin Cycle:
+Carbon dioxide from the air is fixed into organic compounds using energy carried by ATP and NADPH.
+
+Chlorophyll:
+This green pigment strongly reflects wavelengths in the middle of the visible spectrum.
+
+Stomata:
+Tiny pores on the leaf surface open and close to regulate gas exchange with the surrounding air.

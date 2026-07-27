@@ -15,7 +15,9 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from retrieval.chunker import ChunkingPolicy  # noqa: E402
 from retrieval.project_loader import (  # noqa: E402
+    DEFAULT_EXCLUDE_GLOBS,
     MAX_FILE_BYTES,
     discover_files,
     load_ast_chunk_documents,
@@ -23,6 +25,30 @@ from retrieval.project_loader import (  # noqa: E402
     load_chunks,
     load_documents,
     read_text_safe,
+)
+
+#: Guard: every secret-exclusion glob that existed before the hyperparameter-
+#: plumbing work must still be present (constraint: never narrow the
+#: secret-exclusion list). Add new patterns freely; never remove one below.
+_ORIGINAL_EXCLUDE_GLOBS = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.pfx",
+    "*.p12",
+    "*.p8",
+    "id_rsa*",
+    "id_dsa*",
+    "id_ecdsa*",
+    "id_ed25519*",
+    "*.keystore",
+    "*.jks",
+    "*.htpasswd",
+    ".npmrc",
+    ".pypirc",
+    "*credentials*",
+    "*secret*",
 )
 
 try:
@@ -120,6 +146,10 @@ class TestProjectLoader(unittest.TestCase):
             rel = path.relative_to(self.root).as_posix()
             self.assertFalse(rel.startswith("/"))
 
+    def test_default_exclude_globs_contains_every_original_pattern(self) -> None:
+        for pattern in _ORIGINAL_EXCLUDE_GLOBS:
+            self.assertIn(pattern, DEFAULT_EXCLUDE_GLOBS)
+
     def test_empty_dir_returns_empty_list(self) -> None:
         with tempfile.TemporaryDirectory() as empty_dir:
             self.assertEqual(discover_files(empty_dir), [])
@@ -184,6 +214,35 @@ class TestProjectLoader(unittest.TestCase):
             _write(root / "blank.txt", "   \n\n  \n")
             docs = load_chunk_documents(root)
             self.assertEqual(docs, [])
+
+    def test_no_policy_output_identical_to_default_policy(self) -> None:
+        no_policy_docids = {d.docid for d in load_chunk_documents(self.root)}
+        default_policy_docids = {
+            d.docid for d in load_chunk_documents(self.root, policy=ChunkingPolicy())
+        }
+        self.assertEqual(no_policy_docids, default_policy_docids)
+
+    def test_larger_code_chars_yields_strictly_fewer_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(
+                root / "big.py",
+                "\n\n".join(f"def fn_{i}():\n    return {i}" for i in range(80)),
+            )
+            small = load_chunk_documents(root, policy=ChunkingPolicy(code_chars=40))
+            large = load_chunk_documents(root, policy=ChunkingPolicy(code_chars=4000))
+            self.assertGreater(len(small), len(large))
+
+    def test_policy_and_discovery_kwargs_coexist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "a.py", "x = 1\n")
+            _write(root / "b.txt", "hello world\n")
+            docs = load_chunk_documents(
+                root, policy=ChunkingPolicy(code_chars=999), extensions=frozenset({".py"})
+            )
+            source_paths = {d.source_path for d in docs}
+            self.assertEqual(source_paths, {"a.py"})
 
 
 @unittest.skipUnless(_TREESITTER_INSTALLED, "tree-sitter-language-pack not installed")

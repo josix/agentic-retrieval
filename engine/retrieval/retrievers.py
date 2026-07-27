@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checka
 
 from retrieval.bm25 import BM25Index
 from retrieval.document import Document, SearchHit
-from retrieval.fusion import reciprocal_rank_fusion
+from retrieval.fusion import candidate_pool, reciprocal_rank_fusion
 from retrieval.tfidf import TfidfIndex
 
 
@@ -102,16 +102,27 @@ class LexicalRetriever:
 
     name = "lexical (bm25+tfidf+rrf)"
 
+    #: Hyperparameter keys this retriever's constructor accepts (see
+    #: ``build_retriever`` and ``retrieval.persistence.relevant_params``).
+    ACCEPTS = frozenset({"bm25_k1", "bm25_b", "tokenizer"})
+
     #: Bump when the persisted dict shape changes incompatibly; ``from_dict``
     #: rejects any other value so a stale on-disk cache is rebuilt rather than
-    #: mis-parsed. v2 adds ``units`` (chunk span metadata).
-    SCHEMA_VERSION = 2
+    #: mis-parsed. v2 adds ``units`` (chunk span metadata). v3 adds a
+    #: persisted ``tokenizer`` mode on the nested tfidf/bm25 dicts, restored
+    #: (not re-derived) at query time.
+    SCHEMA_VERSION = 3
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *, bm25_k1: float = 1.5, bm25_b: float = 0.75, tokenizer: str = "plain"
+    ) -> None:
         self._docids: List[str] = []
         self._units: List[Dict[str, Any]] = []
-        self._tfidf = TfidfIndex()
-        self._bm25 = BM25Index()
+        self._params: Dict[str, Any] = {
+            "bm25_k1": bm25_k1, "bm25_b": bm25_b, "tokenizer": tokenizer,
+        }
+        self._tfidf = TfidfIndex(tokenizer=tokenizer)
+        self._bm25 = BM25Index(k1=bm25_k1, b=bm25_b, tokenizer=tokenizer)
 
     def index(self, documents: List[Document]) -> None:
         self._units = _units_from_documents(documents)
@@ -151,7 +162,12 @@ class LexicalRetriever:
         schema = data.get("schema")
         if schema != cls.SCHEMA_VERSION:
             raise ValueError(f"unsupported LexicalRetriever schema {schema!r}")
-        retriever = cls()
+        bm25_data = data["bm25"]
+        retriever = cls(
+            bm25_k1=bm25_data["k1"],
+            bm25_b=bm25_data["b"],
+            tokenizer=bm25_data.get("tokenizer", "plain"),
+        )
         retriever._docids = data["docids"]
         retriever._units = data["units"]
         retriever._tfidf = TfidfIndex.from_dict(data["tfidf"])
@@ -174,8 +190,10 @@ class ContextualLexicalRetriever(LexicalRetriever):
 
     name = "lexical+llm-context"
 
-    def __init__(self, contextualizer: Optional[Callable[[str], str]] = None) -> None:
-        super().__init__()
+    def __init__(
+        self, contextualizer: Optional[Callable[[str], str]] = None, **params: Any
+    ) -> None:
+        super().__init__(**params)
         self._contextualizer = contextualizer
 
     def _ensure_contextualizer(self) -> Callable[[str], str]:
@@ -245,6 +263,10 @@ class TurbovecRetriever:
     """
 
     name = "turbovec (dense ann)"
+
+    #: Hyperparameter keys this retriever's constructor accepts (see
+    #: ``build_retriever`` and ``retrieval.persistence.relevant_params``).
+    ACCEPTS = frozenset({"model_name", "bit_width"})
 
     #: Bump when the persisted dict shape changes incompatibly (see
     #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
@@ -369,9 +391,23 @@ class PiSeriniRetriever:
 
     Builds an in-memory Lucene index over the corpus and queries it with
     Pyserini's ``LuceneSearcher``.  Requires Java 21 (Pyserini wraps Anserini).
+
+    ``pi-serini`` (the strategy and registry key, from the Pi-Serini paper)
+    and ``pyserini`` (the library and install extra) are distinct names,
+    not a typo for each other.
     """
 
     name = "pi-serini (lucene bm25)"
+
+    #: Hyperparameter keys this retriever accepts, as exposed to the CLI/
+    #: autotune/``relevant_params`` — named ``lucene_*`` (rather than the
+    #: constructor's own ``k1``/``b``) to disambiguate from the lexical
+    #: arm's ``bm25_k1``/``bm25_b`` when both are surfaced together (e.g. a
+    #: consolidated ``tune``/``stats`` report); mapped back to ``k1``/``b``
+    #: in ``build_retriever`` via ``_CTOR_KWARG_MAP``. The constructor's own
+    #: keyword names stay ``k1``/``b`` for backward compatibility (see
+    #: ``from_dict``, which still does ``cls(k1=data["k1"], ...)``).
+    ACCEPTS = frozenset({"lucene_k1", "lucene_b"})
 
     #: Bump when the persisted dict shape changes incompatibly (see
     #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
@@ -504,14 +540,26 @@ class HybridRetriever:
 
     name = "hybrid (lexical+turbovec rrf)"
 
+    #: Hyperparameter keys this retriever accepts: the union of both arms'
+    #: keys plus ``hybrid_weights`` (an optional ``[lexical_weight,
+    #: dense_weight]`` pair overriding the arms' equal RRF weighting at
+    #: search time). Split back out to each arm's own kwargs in ``__init__``.
+    ACCEPTS = LexicalRetriever.ACCEPTS | TurbovecRetriever.ACCEPTS | frozenset({"hybrid_weights"})
+
     #: Bump when the persisted dict shape changes incompatibly (see
     #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
-    #: metadata).
-    SCHEMA_VERSION = 2
+    #: metadata). v3 tracks the lexical arm's own v3 bump (tokenizer mode).
+    SCHEMA_VERSION = 3
 
-    def __init__(self, dense: Optional[TurbovecRetriever] = None) -> None:
-        self._lexical = LexicalRetriever()
-        self._dense = dense if dense is not None else TurbovecRetriever()
+    def __init__(self, dense: Optional[TurbovecRetriever] = None, **params: Any) -> None:
+        hybrid_weights = params.pop("hybrid_weights", None)
+        lexical_params = {k: v for k, v in params.items() if k in LexicalRetriever.ACCEPTS}
+        dense_params = {k: v for k, v in params.items() if k in TurbovecRetriever.ACCEPTS}
+        self._lexical = LexicalRetriever(**lexical_params)
+        self._dense = dense if dense is not None else TurbovecRetriever(**dense_params)
+        self._hybrid_weights: Optional[List[float]] = (
+            list(hybrid_weights) if hybrid_weights is not None else None
+        )
         self._units_by_docid: Dict[str, Dict[str, Any]] = {}
 
     def index(self, documents: List[Document]) -> None:
@@ -527,15 +575,20 @@ class HybridRetriever:
     def search_detailed(self, query: str, top_k: int) -> List[SearchHit]:
         # Pull a deeper candidate pool from each arm than the caller asked
         # for, so RRF has overlap to work with before truncating to top_k.
-        pool = max(top_k * 3, 10)
+        # Capped at this retriever's own indexed unit count (never deeper
+        # than the corpus itself).
+        pool = candidate_pool(top_k, n_units=len(self._units_by_docid))
         lexical_docids = self._lexical.search(query, pool)
         dense_docids = self._dense.search(query, pool)
         all_docids = sorted(set(lexical_docids) | set(dense_docids))
         to_idx = {docid: i for i, docid in enumerate(all_docids)}
-        fused = reciprocal_rank_fusion([
-            [to_idx[d] for d in lexical_docids],
-            [to_idx[d] for d in dense_docids],
-        ])
+        fused = reciprocal_rank_fusion(
+            [
+                [to_idx[d] for d in lexical_docids],
+                [to_idx[d] for d in dense_docids],
+            ],
+            weights=self._hybrid_weights,
+        )
         results = []
         for rank, (idx, _score) in enumerate(fused[:top_k]):
             docid = all_docids[idx]
@@ -557,13 +610,16 @@ class HybridRetriever:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize both arms to a JSON-safe dict for on-disk persistence."""
         lexical_data = self._lexical.to_dict()
-        return {
+        data = {
             "schema": self.SCHEMA_VERSION,
             "docids": lexical_data["docids"],
             "units": lexical_data["units"],
             "lexical": lexical_data,
             "dense": self._dense.to_dict(),
         }
+        if self._hybrid_weights is not None:
+            data["hybrid_weights"] = self._hybrid_weights
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HybridRetriever":
@@ -579,6 +635,7 @@ class HybridRetriever:
         retriever._lexical = LexicalRetriever.from_dict(data["lexical"])
         retriever._dense = TurbovecRetriever.from_dict(data["dense"])
         retriever._units_by_docid = {u["docid"]: u for u in data["units"]}
+        retriever._hybrid_weights = data.get("hybrid_weights")
         return retriever
 
 
@@ -593,7 +650,39 @@ REGISTRY = {
 }
 
 
-def build_retriever(name: str) -> Retriever:
+#: Retriever name -> {public param key: constructor keyword} overrides,
+#: where a retriever's CLI/autotune-facing param name differs from its
+#: actual constructor keyword (kept stable for backward compatibility —
+#: see ``PiSeriniRetriever.ACCEPTS``).
+_CTOR_KWARG_MAP: Dict[str, Dict[str, str]] = {
+    "pi-serini": {"lucene_k1": "k1", "lucene_b": "b"},
+}
+
+
+def resolve_ctor_kwargs(name: str, cls: type, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Filter *params* down to *cls*'s ``ACCEPTS`` (empty set if undeclared)
+    and map each key to its constructor keyword name (see ``_CTOR_KWARG_MAP``).
+
+    Unknown keys are silently dropped. ``params=None`` (or empty) yields an
+    empty kwargs dict, reproducing a bare ``cls()`` construction.
+    """
+    if not params:
+        return {}
+    accepts = getattr(cls, "ACCEPTS", frozenset())
+    mapping = _CTOR_KWARG_MAP.get(name, {})
+    return {mapping.get(k, k): v for k, v in params.items() if k in accepts}
+
+
+def build_retriever(name: str, params: Optional[Dict[str, Any]] = None) -> Retriever:
+    """Construct retriever *name*, optionally applying *params*.
+
+    *params* is filtered to the retriever class's own ``ACCEPTS`` and mapped
+    to constructor keywords (see ``resolve_ctor_kwargs``); unknown keys are
+    silently dropped. ``params=None`` (the default) reproduces a bare,
+    default-hyperparameter construction, identical to before this parameter
+    existed.
+    """
     if name not in REGISTRY:
         raise ValueError(f"unknown retriever {name!r}; choose from {list(REGISTRY)}")
-    return REGISTRY[name]()
+    cls = REGISTRY[name]
+    return cls(**resolve_ctor_kwargs(name, cls, params))

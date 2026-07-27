@@ -12,10 +12,48 @@ import re
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 
+#: Supported tokenizer modes (see ``tokenize``).
+TOKENIZER_MODES = ("plain", "code")
 
-def tokenize(text: str) -> List[str]:
-    """Shared tokenizer: lowercase, extract \\w+ tokens."""
-    return re.findall(r"\w+", text.lower())
+#: Splits an identifier into subtokens on separators (``_``, ``-``, ``.``) and
+#: at camelCase/PascalCase boundaries (lower-to-upper, and the last upper of
+#: an acronym run before a following Titlecase word, e.g. "HTTPSConnection"
+#: -> "HTTPS" / "Connection").
+_SPLIT_RE = re.compile(r"[_\-.]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def tokenize(text: str, mode: str = "plain") -> List[str]:
+    """Shared tokenizer: lowercase, extract \\w+ tokens.
+
+    ``mode="plain"`` (default) is byte-identical to the original tokenizer.
+    ``mode="code"`` additionally emits each whole token's lowercased
+    subtokens (split on ``_``/``-``/``.`` and camelCase/PascalCase
+    boundaries) right after the whole token, left-to-right — e.g.
+    ``"getUserById"`` -> ``["getuserbyid", "get", "user", "by", "id"]`` — but
+    only when splitting actually yields >=2 non-empty parts, and never
+    re-emitting a subtoken identical to the whole token (so a
+    non-splitting token like ``"chunk"`` isn't duplicated).
+    """
+    if mode not in TOKENIZER_MODES:
+        raise ValueError(f"unknown tokenizer mode {mode!r}; choose from {TOKENIZER_MODES}")
+    if mode == "plain":
+        return re.findall(r"\w+", text.lower())
+
+    # Case-sensitive extraction first: camelCase/PascalCase boundaries only
+    # exist in the original casing, so lowercasing up front (as "plain" does)
+    # would destroy the very signal "code" mode splits on.
+    tokens: List[str] = []
+    for raw in re.findall(r"\w+", text):
+        whole = raw.lower()
+        tokens.append(whole)
+        parts = [p for p in _SPLIT_RE.split(raw) if p]
+        if len(parts) < 2:
+            continue
+        for part in parts:
+            lowered = part.lower()
+            if lowered != whole:
+                tokens.append(lowered)
+    return tokens
 
 
 def _doc_weights(tokens: List[str], idf: Dict[str, float]) -> Dict[str, float]:
@@ -39,9 +77,23 @@ def _doc_weights(tokens: List[str], idf: Dict[str, float]) -> Dict[str, float]:
 
 
 class TfidfIndex:
-    """TF-IDF index over a corpus of documents."""
+    """TF-IDF index over a corpus of documents.
 
-    def __init__(self) -> None:
+    Parameters
+    ----------
+    tokenizer : str
+        Tokenizer mode, one of ``TOKENIZER_MODES`` (default ``"plain"``).
+        Raises ``ValueError`` on an unknown mode. The mode is persisted
+        (``to_dict``/``from_dict``) and never re-derived at query time — a
+        restored index always queries with the mode it was fit with.
+    """
+
+    def __init__(self, tokenizer: str = "plain") -> None:
+        if tokenizer not in TOKENIZER_MODES:
+            raise ValueError(
+                f"unknown tokenizer mode {tokenizer!r}; choose from {TOKENIZER_MODES}"
+            )
+        self.tokenizer = tokenizer
         self._doc_vectors: List[Dict[str, float]] = []        # per-doc sparse weights
         self._postings: Dict[str, List[Tuple[int, float]]] = {}  # term -> [(doc, weight)]
         self._n_docs: int = 0
@@ -56,7 +108,7 @@ class TfidfIndex:
             return
 
         self._n_docs = len(docs)
-        tokenized = [tokenize(d) for d in docs]
+        tokenized = [tokenize(d, self.tokenizer) for d in docs]
 
         df: Dict[str, int] = {}
         for tokens in tokenized:
@@ -78,7 +130,7 @@ class TfidfIndex:
             return []
 
         # Query vector: log-normalized TF, L2-normalized (no IDF, as before).
-        tf_counts = Counter(tokenize(text))
+        tf_counts = Counter(tokenize(text, self.tokenizer))
         qvec: Dict[str, float] = {}
         for w, count in tf_counts.items():
             qvec[w] = 1.0 + math.log(count) if count > 0 else 0.0
@@ -101,6 +153,7 @@ class TfidfIndex:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize fitted state to a JSON-safe dict (tuples become lists)."""
         return {
+            "tokenizer": self.tokenizer,
             "n_docs": self._n_docs,
             "doc_vectors": self._doc_vectors,
             "postings": {
@@ -111,8 +164,13 @@ class TfidfIndex:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TfidfIndex":
-        """Rebuild a ``TfidfIndex`` from ``to_dict`` output (re-tuples postings)."""
-        index = cls()
+        """Rebuild a ``TfidfIndex`` from ``to_dict`` output (re-tuples postings).
+
+        The tokenizer mode is restored from the persisted dict (defaulting
+        to ``"plain"`` for a pre-tokenizer-modes cache) — query time never
+        re-derives it.
+        """
+        index = cls(tokenizer=data.get("tokenizer", "plain"))
         index._n_docs = data["n_docs"]
         index._doc_vectors = data["doc_vectors"]
         index._postings = {

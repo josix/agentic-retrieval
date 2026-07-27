@@ -1,5 +1,6 @@
 """Consolidate per-retriever ``SearchHit`` rankings into a single, deduplicated,
-explainable ranking a following conversation/agent can act on directly.
+explainable ranking — a starting ranking a following conversation/agent
+verifies and explores from.
 
 Pure stdlib. Given ``{retriever_name: [SearchHit, ...]}`` (one ranked list per
 retriever already run against the same query), ``consolidate`` merges hits
@@ -8,7 +9,10 @@ whose spans overlap (or are line-adjacent) into a single canonical
 weighted) Reciprocal Rank Fusion, and returns the fused list sorted best
 first — with provenance (which retrievers found it), agreement (how many),
 and a confidence label baked in so the handoff is self-explanatory without
-re-deriving any of this from the raw per-retriever output.
+re-deriving any of this from the raw per-retriever output. Confidence and
+score reflect cross-retriever agreement on query-text match, not currency or
+authority — a "high" hit can still point at legacy or deprecated code, and
+consumers must verify each span against the live source before relying on it.
 """
 
 from dataclasses import dataclass, field
@@ -140,7 +144,11 @@ def _canonical_context(group: List[SearchHit], ordered_names: List[str],
 
 def _confidence_for(agreement: int, provenance: List[str]) -> str:
     """"high" if >=2 retrievers agree; else "medium" if the sole contributing
-    arm is a dense/Lucene arm; else "low"."""
+    arm is a dense/Lucene arm; else "low". NOTE: confidence measures
+    cross-retriever agreement on query-text match — it is NOT a signal of
+    currency, authority, or that the span is non-deprecated. A "high" span
+    may be legacy code two retrievers both surfaced; consumers must verify
+    against the live source before relying on it."""
     if agreement >= 2:
         return "high"
     if provenance and provenance[0] in _STRONG_SOLO_RETRIEVERS:

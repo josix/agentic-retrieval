@@ -59,12 +59,11 @@ uv run --project engine --extra all retrieval index --root "$PROJECT_ROOT"
 Expected output:
 
 ```
-indexed 42 docs -> /Users/you/.cache/agentic-retrieval/indexes/<hash>  fingerprint=<hash-prefix>
+indexed 42 docs -> /Users/you/project/.agentic-retrieval  fingerprint=<hash-prefix>
 ```
 
 (The doc count and hash will differ for your project.) This persists a JSON
-cache under `~/.cache/agentic-retrieval/indexes`, keyed by your
-project's resolved path.
+cache under `<project-root>/.agentic-retrieval`.
 
 ## 4. Query it
 

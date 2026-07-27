@@ -56,7 +56,10 @@ retriever a query picks turns out to be missing/skipped, fall back to
 (default, alias `--retriever all`) skips this per-method choice entirely: it
 consolidates every available strategy's ranking into one deduplicated,
 explainable list in a single call — see "Consolidating more than two
-rankings" below and `docs/how-to/consolidated-query.md`.
+rankings" below and `docs/how-to/consolidated-query.md`. Querying a single
+method instead (`--retriever <name>`) trades away that cross-retriever
+agreement signal for lower latency — see `docs/how-to/evaluate-retrievers.md`
+for measuring the tradeoff.
 
 ## Setup
 
@@ -130,7 +133,11 @@ does exactly this fusion internally. Treat a resolved span as a seed to read
 and explore from, not the final answer — follow the references it surfaces
 outward and re-query with the vocabulary a hit reveals; if the top spans
 look noisy, re-query, switch retriever, or raise `--top-k` (see the
-`retrieval` skill's Step 3).
+`retrieval` skill's Step 3). Present your final answer as traced prose with
+verified `file:line` citations — never lead with the raw ranked list, and
+confirm each span against the current file first: a high rank/confidence
+reflects query-text match and retriever agreement, not that the code is
+current or non-deprecated.
 
 ## Consolidating more than two rankings
 

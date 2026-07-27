@@ -1,6 +1,6 @@
 [project]
-name = "rag-retrieval"
-version = "0.3.0"
+name = "agentic-retrieval"
+version = "0.7.0"
 description = "Fully offline contextual RAG retrieval experiment"
 requires-python = ">=3.10"
 license = "MIT"
@@ -40,7 +40,7 @@ pyserini = ["pyserini"]
 # pack version is not implicated). See retrieval/ast_chunker.py::chunk_code.
 treesitter = ["tree-sitter>=0.24,<0.26", "tree-sitter-language-pack"]
 # Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter)
-all = ["rag-retrieval[local,remote,turbovec,pyserini,treesitter]"]
+all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter]"]
 # Dev tooling
 dev = ["ruff", "isort", "complexipy"]
 

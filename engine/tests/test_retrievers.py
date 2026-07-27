@@ -201,6 +201,38 @@ class TestHybridRetriever(unittest.TestCase):
         )
 
 
+class TestBuildRetrieverParams(unittest.TestCase):
+    def test_build_retriever_filters_and_maps_params(self) -> None:
+        r = build_retriever("lexical", {"bm25_k1": 1.2, "unknown": 9})
+        self.assertIsInstance(r, LexicalRetriever)
+        self.assertEqual(r._bm25.k1, 1.2)
+
+    def test_build_retriever_none_params_reproduces_defaults(self) -> None:
+        r = build_retriever("lexical")
+        self.assertEqual(r._bm25.k1, 1.5)
+        self.assertEqual(r._bm25.b, 0.75)
+        self.assertEqual(r._tfidf.tokenizer, "plain")
+
+    def test_tokenizer_round_trip_identical_ranking_pre_and_post_persist(self) -> None:
+        documents = _documents()
+        r = build_retriever("lexical", {"tokenizer": "code"})
+        r.index(documents)
+        data = r.to_dict()
+        restored = LexicalRetriever.from_dict(data)
+        self.assertEqual(restored._tfidf.tokenizer, "code")
+        self.assertEqual(restored._bm25.tokenizer, "code")
+        for query in ("what carries data between networks", "asteroid belt"):
+            self.assertEqual(r.search(query, top_k=3), restored.search(query, top_k=3))
+
+    def test_hybrid_forwards_params_to_correct_arms(self) -> None:
+        r = build_retriever(
+            "hybrid", {"bm25_k1": 1.2, "model_name": "some/model", "unknown": 9}
+        )
+        self.assertIsInstance(r, HybridRetriever)
+        self.assertEqual(r._lexical._bm25.k1, 1.2)
+        self.assertEqual(r._dense._model_name, "some/model")
+
+
 class TestTreeSitterRetriever(unittest.TestCase):
     """LexicalRetriever over AST-chunk Documents; no tree-sitter needed here —
     span/context metadata is fed in directly via inline Documents."""

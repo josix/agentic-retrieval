@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from retrieval.ast_chunker import chunk_code, language_for_path
-from retrieval.chunker import Chunk, chunk_document
+from retrieval.chunker import DEFAULT_POLICY, Chunk, ChunkingPolicy, chunk_document
 from retrieval.document import Document
 
 DEFAULT_EXTENSIONS = frozenset(
@@ -77,6 +77,7 @@ DEFAULT_EXCLUDE_DIRS = frozenset(
         "venv",
         "env",
         "node_modules",
+        "vendor",
         "__pycache__",
         ".claude",
         "dist",
@@ -93,6 +94,7 @@ DEFAULT_EXCLUDE_DIRS = frozenset(
         ".cache",
         "site-packages",
         ".complexipy_cache",
+        ".agentic-retrieval",
     }
 )
 
@@ -251,21 +253,30 @@ def load_documents(
 
 def load_chunks(
     root: "os.PathLike[str] | str",
+    *,
+    policy: Optional[ChunkingPolicy] = None,
     **kw,
 ) -> List[Chunk]:
     """Discover files under *root*, chunk each one, and return a flat list.
 
     Each file's relative POSIX path is used as ``doc_id`` when chunking, so
-    chunk ids and doc_ids trace back to a real project path.
+    chunk ids and doc_ids trace back to a real project path. *policy*
+    (default ``DEFAULT_POLICY``, reproducing today's flat 400-char chunking)
+    picks each file's ``target_chars`` bucket by suffix; **kw is forwarded
+    only to ``discover_files``.
     """
+    resolved_policy = policy or DEFAULT_POLICY
     chunks: List[Chunk] = []
     for document in load_documents(root, **kw):
-        chunks.extend(chunk_document(document.docid, document.text))
+        target_chars = resolved_policy.target_chars_for(document.docid)
+        chunks.extend(chunk_document(document.docid, document.text, target_chars))
     return chunks
 
 
 def load_chunk_documents(
     root: "os.PathLike[str] | str",
+    *,
+    policy: Optional[ChunkingPolicy] = None,
     **kw,
 ) -> List[Document]:
     """Discover files under *root*, chunk each one, and return one chunk-
@@ -277,11 +288,16 @@ def load_chunk_documents(
     this is what the production retrievers (see ``retrieval/retrievers.py``)
     index so search results can point a coding agent at an exact
     ``file:line`` location. A file with only blank content yields no chunks
-    and therefore no Documents.
+    and therefore no Documents. *policy* (default ``DEFAULT_POLICY``,
+    reproducing today's flat 400-char chunking) picks each file's
+    ``target_chars`` bucket by suffix; **kw is forwarded only to
+    ``discover_files``.
     """
+    resolved_policy = policy or DEFAULT_POLICY
     documents: List[Document] = []
     for document in load_documents(root, **kw):
-        for chunk in chunk_document(document.docid, document.text):
+        target_chars = resolved_policy.target_chars_for(document.docid)
+        for chunk in chunk_document(document.docid, document.text, target_chars):
             docid = f"{document.docid}:{chunk.start_line}-{chunk.end_line}"
             documents.append(
                 Document(
@@ -298,6 +314,8 @@ def load_chunk_documents(
 
 def load_ast_chunk_documents(
     root: "os.PathLike[str] | str",
+    *,
+    policy: Optional[ChunkingPolicy] = None,
     **kw,
 ) -> List[Document]:
     """Discover files under *root* and return one AST-boundary chunk-
@@ -305,24 +323,32 @@ def load_ast_chunk_documents(
 
     For each file, resolves a tree-sitter language from its suffix (via
     ``language_for_path``); when a language is found, chunks with
-    ``chunk_code`` at AST node boundaries, carrying a breadcrumb
-    ``context`` (enclosing function/class path, e.g. ``"Bar.baz"``) on each
-    Document. Files with no mapped language, or whose AST chunking returns
-    no chunks (e.g. a severely broken parse), fall back to the line-based
-    ``chunk_document`` — same as ``load_chunk_documents`` — with an empty
-    ``context``.
+    ``chunk_code`` at AST node boundaries (budget ``policy.ast_max_chars``),
+    carrying a breadcrumb ``context`` (enclosing function/class path, e.g.
+    ``"Bar.baz"``) on each Document. Files with no mapped language, or whose
+    AST chunking returns no chunks (e.g. a severely broken parse), fall back
+    to the line-based ``chunk_document`` — same as ``load_chunk_documents``,
+    including *policy*'s ``target_chars_for`` bucket — with an empty
+    ``context``. *policy* defaults to ``DEFAULT_POLICY`` (reproducing
+    today's behavior); **kw is forwarded only to ``discover_files``.
 
     A missing ``tree-sitter-language-pack`` install surfaces as a
     ``RuntimeError`` (raised by ``chunk_code``) and is *not* caught here: it
     is the signal an all-mode index run uses to skip this strategy (see
     ``retrieval.cli._index_all``).
     """
+    resolved_policy = policy or DEFAULT_POLICY
     documents: List[Document] = []
     for document in load_documents(root, **kw):
         language = language_for_path(document.docid)
-        chunks = chunk_code(document.docid, document.text, language) if language else []
+        chunks = (
+            chunk_code(document.docid, document.text, language, resolved_policy.ast_max_chars)
+            if language
+            else []
+        )
         if not chunks:
-            chunks = chunk_document(document.docid, document.text)
+            target_chars = resolved_policy.target_chars_for(document.docid)
+            chunks = chunk_document(document.docid, document.text, target_chars)
         for chunk in chunks:
             docid = f"{document.docid}:{chunk.start_line}-{chunk.end_line}"
             documents.append(

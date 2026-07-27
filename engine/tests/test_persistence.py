@@ -21,6 +21,7 @@ if str(_ROOT_DIR) not in sys.path:
 from retrieval.bm25 import BM25Index  # noqa: E402
 from retrieval.document import Document  # noqa: E402
 from retrieval.persistence import (  # noqa: E402
+    _loader_kw_from_meta,
     cache_base_dir,
     cached_retrievers,
     compute_fingerprint,
@@ -28,9 +29,14 @@ from retrieval.persistence import (  # noqa: E402
     is_stale,
     load_index,
     project_key,
+    relevant_params,
     save_index,
 )
-from retrieval.project_loader import load_chunk_documents, load_documents  # noqa: E402
+from retrieval.project_loader import (  # noqa: E402
+    discover_files,
+    load_chunk_documents,
+    load_documents,
+)
 from retrieval.retrievers import (  # noqa: E402
     HybridRetriever,
     LexicalRetriever,
@@ -152,10 +158,26 @@ class TestPersistence(unittest.TestCase):
 
         directory = index_dir(self.root)
         data = json.loads((directory / "lexical.json").read_text(encoding="utf-8"))
-        self.assertEqual(data["schema"], 2)
+        self.assertEqual(data["schema"], 3)
         # Simulate a stale v1 cache (no "units" key, old schema number).
         data["schema"] = 1
         del data["units"]
+        (directory / "lexical.json").write_text(json.dumps(data), encoding="utf-8")
+
+        self.assertIsNone(load_index(self.root, "lexical"))
+
+    def test_genuine_v2_schema_payload_forces_rebuild(self) -> None:
+        """A real v2 (pre-tokenizer-mode) on-disk cache — same shape as
+        today's v3 except for the schema number itself — must also be
+        rejected, not silently mis-parsed as v3."""
+        docs = load_documents(self.root)
+        retriever = LexicalRetriever()
+        retriever.index(docs)
+        save_index(retriever, self.root, compute_fingerprint(self.root), "lexical", "0.5.0")
+
+        directory = index_dir(self.root)
+        data = json.loads((directory / "lexical.json").read_text(encoding="utf-8"))
+        data["schema"] = 2
         (directory / "lexical.json").write_text(json.dumps(data), encoding="utf-8")
 
         self.assertIsNone(load_index(self.root, "lexical"))
@@ -214,6 +236,131 @@ class TestPersistence(unittest.TestCase):
 
             _bump_mtime(path)
             self.assertTrue(is_stale(root, meta))
+
+    # -- hyperparams meta + is_stale(params) -----------------------------------
+
+    def test_save_index_meta_gains_blocks_only_when_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.6.0",
+                params={"code_chars": 400, "unrelated": 1},
+                corpus_stats={"mean_chunk_tokens": 42},
+                loader_kw={"extensions": frozenset({".py", ".md"})},
+            )
+            _retriever, meta = load_index(root)
+            self.assertEqual(meta["hyperparams"], {"code_chars": 400})
+            self.assertEqual(meta["corpus_stats"], {"mean_chunk_tokens": 42})
+            self.assertEqual(sorted(meta["loader_kw"]["extensions"]), [".md", ".py"])
+
+    def test_save_index_omits_blocks_when_not_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.6.0")
+            _retriever, meta = load_index(root)
+            self.assertNotIn("hyperparams", meta)
+            self.assertNotIn("corpus_stats", meta)
+            self.assertNotIn("loader_kw", meta)
+
+    def test_is_stale_true_on_changed_relevant_param_same_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.6.0",
+                params={"code_chars": 400},
+            )
+            _retriever, meta = load_index(root)
+            self.assertFalse(is_stale(root, meta, params={"code_chars": 400}))
+            self.assertTrue(is_stale(root, meta, params={"code_chars": 1200}))
+
+    def test_is_stale_params_none_ignores_hyperparams(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.6.0",
+                params={"code_chars": 400},
+            )
+            _retriever, meta = load_index(root)
+            # A changed hyperparam is invisible when params=None (default):
+            # fingerprint-only behavior, unchanged from before this feature.
+            self.assertFalse(is_stale(root, meta))
+
+    def test_is_stale_pre_upgrade_meta_stale_under_any_params(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.6.0")  # no params
+            _retriever, meta = load_index(root)
+            self.assertNotIn("hyperparams", meta)
+            self.assertFalse(is_stale(root, meta))  # params=None: fingerprint-only
+            self.assertTrue(is_stale(root, meta, params={"code_chars": 400}))
+
+    def test_relevant_params_excludes_bm25_k1_for_turbovec(self) -> None:
+        self.assertEqual(
+            relevant_params("turbovec", {"bm25_k1": 1.2, "model_name": "x"}),
+            {"model_name": "x"},
+        )
+
+    def test_is_stale_true_on_changed_bm25_k1_same_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever(bm25_k1=1.2)
+            retriever.index(load_documents(root))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.6.0",
+                params={"bm25_k1": 1.2},
+            )
+            _retriever, meta = load_index(root)
+            self.assertEqual(meta["hyperparams"], {"bm25_k1": 1.2})
+            self.assertFalse(is_stale(root, meta, params={"bm25_k1": 1.2}))
+            self.assertTrue(is_stale(root, meta, params={"bm25_k1": 1.8}))
+
+    def test_relevant_params_includes_chunking_keys_for_every_retriever(self) -> None:
+        for name in ("lexical", "turbovec", "pi-serini", "hybrid", "treesitter"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    relevant_params(name, {"code_chars": 1200, "unrelated_key": 1}),
+                    {"code_chars": 1200},
+                )
+
+    def test_loader_kw_from_meta_rehydrates_frozensets(self) -> None:
+        meta = {
+            "loader_kw": {
+                "extensions": [".py", ".md"],
+                "exclude_dirs": [".git"],
+                "include_basenames": ["readme"],
+                "max_bytes": 500,
+            }
+        }
+        result = _loader_kw_from_meta(meta)
+        self.assertEqual(result["extensions"], frozenset({".py", ".md"}))
+        self.assertEqual(result["exclude_dirs"], frozenset({".git"}))
+        self.assertEqual(result["include_basenames"], frozenset({"readme"}))
+        self.assertEqual(result["max_bytes"], 500)  # not a frozenset key: passed through
+
+    def test_loader_kw_from_meta_empty_when_no_loader_kw_block(self) -> None:
+        self.assertEqual(_loader_kw_from_meta({}), {})
 
     # -- load_index -----------------------------------------------------------
 
@@ -376,6 +523,31 @@ class TestPersistence(unittest.TestCase):
                 _write(root / "x.txt", "hello")
                 directory = index_dir(root)
                 self.assertTrue(str(directory).startswith(override_dir))
+
+    def test_index_dir_defaults_to_in_project_root_without_override(self) -> None:
+        old_env = os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp) / "project"
+                root.mkdir()
+                self.assertIsNone(cache_base_dir())
+                self.assertEqual(index_dir(root), root.resolve() / ".agentic-retrieval")
+        finally:
+            if old_env is not None:
+                os.environ["RETRIEVAL_INDEX_DIR"] = old_env
+
+    def test_discover_files_excludes_default_cache_dir(self) -> None:
+        """The in-root default cache dir must never feed back into discovery
+        (avoids indexing the cache's own lexical.json/meta.json)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "a.txt", "hello world")
+            _write(root / ".agentic-retrieval" / "lexical.json", "{}")
+            _write(root / ".agentic-retrieval" / "meta.json", "{}")
+
+            found = list(discover_files(root))
+            self.assertTrue(any(p.name == "a.txt" for p in found))
+            self.assertFalse(any(".agentic-retrieval" in p.parts for p in found))
 
 
 if __name__ == "__main__":

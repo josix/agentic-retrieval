@@ -6,16 +6,27 @@ On-disk persistence for fitted retrievers, keyed by project path
 
 ## Cache directory scheme
 
-The cache lives at `cache_base_dir() / project_key(root)`:
+By default, the cache lives in-project at `<project-root>/.agentic-retrieval`
+(`CACHE_DIRNAME`) — resolved from the indexed root's absolute path, so it
+follows the project regardless of where it's checked out. This directory is
+excluded from file discovery by name, so it never feeds back into an
+index/query run.
 
-- `cache_base_dir()` defaults to `~/.cache/agentic-retrieval/indexes`
-  (`DEFAULT_BASE`); override with the `RETRIEVAL_INDEX_DIR` environment
-  variable.
+Set the `RETRIEVAL_INDEX_DIR` environment variable to instead use a shared
+base directory outside the project, keyed by a hash of the project path:
+`cache_base_dir() / project_key(root)`, where:
+
+- `cache_base_dir()` returns `Path(RETRIEVAL_INDEX_DIR)` when the variable
+  is set, else `None` (meaning "use the in-project default" above).
 - `project_key(root)` is the SHA-256 of the resolved, absolute POSIX path of
   `root`, truncated to **16 hex characters** — short enough for a directory
   name, long enough that collisions are not a practical concern. Different
   projects (and different checkouts of the same repo, since each resolves
   to a different absolute path) never collide.
+
+Note: caches previously written under the old default,
+`~/.cache/agentic-retrieval`, are no longer read or written by this engine
+and can be deleted manually.
 
 Each retriever gets its own data + meta file pair inside the per-project
 cache directory, so different retrievers' caches for the same project
@@ -94,11 +105,16 @@ as "no usable cache"), never a partially-written one.
 
 ## `RETRIEVAL_INDEX_DIR` + self-indexing warning
 
+The default, in-project cache directory (`.agentic-retrieval`) is excluded
+from discovery by name, so the common case (no override) is safe. The
+warning below now applies only to overrides.
+
 !!! warning
-    If `RETRIEVAL_INDEX_DIR` is pointed *inside* the indexed project root,
-    the cache's `lexical.json`/`meta.json` get swept up as documents on the
-    next index/query run (a feedback loop) — only a directory literally
-    named `.cache` is excluded by default (see
+    If `RETRIEVAL_INDEX_DIR` is pointed *inside* the indexed project root
+    using a directory name other than `.agentic-retrieval`, the cache's
+    `lexical.json`/`meta.json` get swept up as documents on the next
+    index/query run (a feedback loop) — only `.agentic-retrieval` is
+    excluded by default (see
     [customize indexing](../how-to/customize-indexing.md)), so any other
     cache dirname is fair game for re-indexing. Point `RETRIEVAL_INDEX_DIR`
     outside the project root instead.

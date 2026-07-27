@@ -10,7 +10,7 @@ import math
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 
-from retrieval.tfidf import tokenize
+from retrieval.tfidf import TOKENIZER_MODES, tokenize
 
 
 class BM25Index:
@@ -22,11 +22,20 @@ class BM25Index:
         Term frequency saturation parameter (default 1.5).
     b : float
         Length normalization parameter (default 0.75).
+    tokenizer : str
+        Tokenizer mode, one of ``retrieval.tfidf.TOKENIZER_MODES`` (default
+        ``"plain"``). Raises ``ValueError`` on an unknown mode. Persisted
+        (``to_dict``/``from_dict``) and never re-derived at query time.
     """
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(self, k1: float = 1.5, b: float = 0.75, tokenizer: str = "plain") -> None:
+        if tokenizer not in TOKENIZER_MODES:
+            raise ValueError(
+                f"unknown tokenizer mode {tokenizer!r}; choose from {TOKENIZER_MODES}"
+            )
         self.k1 = k1
         self.b = b
+        self.tokenizer = tokenizer
         self._tf: List[Dict[str, int]] = []      # per-doc term frequencies
         self._dl: List[int] = []                 # per-doc length
         self._postings: Dict[str, List[int]] = {}  # term -> doc indices
@@ -48,7 +57,7 @@ class BM25Index:
         self._n_docs = len(docs)
         total_len = 0
         for doc_idx, doc in enumerate(docs):
-            tokens = tokenize(doc)
+            tokens = tokenize(doc, self.tokenizer)
             counts = Counter(tokens)
             self._tf.append(counts)
             self._dl.append(len(tokens))
@@ -75,7 +84,7 @@ class BM25Index:
         if self._n_docs == 0:
             return []
 
-        query_terms = set(tokenize(text))
+        query_terms = set(tokenize(text, self.tokenizer))
         scores: Dict[int, float] = {}
         for term in query_terms:
             postings = self._postings.get(term)
@@ -98,6 +107,7 @@ class BM25Index:
         return {
             "k1": self.k1,
             "b": self.b,
+            "tokenizer": self.tokenizer,
             "n_docs": self._n_docs,
             "avgdl": self._avgdl,
             "tf": [dict(counts) for counts in self._tf],
@@ -112,9 +122,11 @@ class BM25Index:
 
         Restored ``tf``/``postings``/``df`` stay plain dicts/lists — only
         ``[]`` indexing is used on them at query time, so no re-hydration
-        into ``Counter`` is required.
+        into ``Counter`` is required. The tokenizer mode is restored from
+        the persisted dict (defaulting to ``"plain"`` for a pre-tokenizer-
+        modes cache) — query time never re-derives it.
         """
-        index = cls(k1=data["k1"], b=data["b"])
+        index = cls(k1=data["k1"], b=data["b"], tokenizer=data.get("tokenizer", "plain"))
         index._n_docs = data["n_docs"]
         index._avgdl = data["avgdl"]
         index._tf = data["tf"]

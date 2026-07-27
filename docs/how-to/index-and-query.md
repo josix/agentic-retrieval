@@ -21,8 +21,9 @@ With no `--retriever` (the default, `all`), `index` builds every strategy's
 cache in one pass — `lexical` (TF-IDF + BM25 fused with RRF, the
 zero-dependency baseline), plus `turbovec`, `pi-serini`, and `hybrid`
 whenever their optional extras are present — each persisted as its own JSON
-cache slot under `~/.cache/agentic-retrieval/indexes` (override with
-`RETRIEVAL_INDEX_DIR`), keyed by the project's resolved path. A missing
+cache slot under `<project-root>/.agentic-retrieval` (override with
+`RETRIEVAL_INDEX_DIR`, which instead keys a shared base dir by the
+project's resolved path). A missing
 backend is *skipped*, not a hard failure — the run still exits `0` as long
 as `lexical` itself succeeds:
 
@@ -32,7 +33,7 @@ uv run --project engine --extra all retrieval index --root "$PROJECT_ROOT"
 # turbovec: indexed 42 docs
 # pi-serini: indexed 42 docs
 # hybrid: indexed 42 docs
-# -> /Users/you/.cache/agentic-retrieval/indexes/<hash>
+# -> /Users/you/project/.agentic-retrieval
 ```
 
 If, say, `turbovec`'s extras aren't installed, that line reads
@@ -109,9 +110,9 @@ staleness, and on-disk location:
 root: /Users/you/project
 docs: 42
 created: 2026-07-13T10:00:00Z
-engine: 0.2.0
+engine: <engine version>
 stale: False
-cache: /Users/you/.cache/agentic-retrieval/indexes/<hash>
+cache: /Users/you/project/.agentic-retrieval
 ```
 
 ## The `/retrieval` subcommands in Claude Code
