@@ -6,6 +6,18 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.7.1 — 2026-07-27
+
+- **\[docs\] Method explainers for every strategy.**
+  `docs/concepts/retrieval-strategies.md` now explains each method, not
+  just pi-serini: new "The lexical method" (TF-IDF + BM25 + RRF, and the
+  contextual-enrichment link to Anthropic's Contextual Retrieval), "The
+  turbovec method" (dense ANN over TurboQuant-quantized embeddings), "The
+  hybrid method" (with the RRF citation — Cormack et al., SIGIR 2009), and
+  "The tree-sitter method" (with the cAST citation — Zhang et al.,
+  arXiv:2506.15655) sections; the hybrid-fusion how-to links to the new
+  hybrid section.
+
 ## 0.7.0 — 2026-07-27
 
 - **\[engine\]** `vendor/` added to `DEFAULT_EXCLUDE_DIRS` in

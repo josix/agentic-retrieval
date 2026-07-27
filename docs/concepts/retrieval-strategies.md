@@ -36,6 +36,50 @@ Repeated with the fusion and contextualization rows:
 | Sparse retrieval keeps missing a document for lack of shared vocabulary, but standing up dense/Lucene isn't worth it | Contextualize at index time instead |
 | Any optional backend raises `RuntimeError` | Fall back to plain `lexical` |
 
+## The lexical method
+
+`LexicalRetriever` builds two classical sparse indexes over the same
+corpus — TF-IDF and BM25 — and fuses their per-query rankings with
+reciprocal rank fusion (RRF; see [the hybrid method](#the-hybrid-method)
+for the citation). Both algorithms match on shared **tokens**, not
+meaning: a document ranks highly only if it contains words the query
+contains. TF-IDF rewards rare, discriminative terms; BM25 adds
+term-frequency saturation and document-length normalization; fusing the
+two rankings hedges each scorer's individual biases at zero extra
+dependency cost. The whole pipeline is pure stdlib, which is why it is
+the always-available baseline every other strategy degrades to.
+
+Its known failure mode is vocabulary mismatch: a query saying "carries
+data" never matches a document saying "forwards packets". The
+**lexical+ctx** variant closes that gap at *index* time instead of
+changing the ranking function — each document is prefixed with a short
+generated context (topics and key entities) before TF-IDF/BM25 are fit,
+following Anthropic's [Contextual
+Retrieval](https://www.anthropic.com/news/contextual-retrieval) method.
+See [contextual retrieval](contextual-retrieval.md) for the
+heuristic-vs-LLM contextualizer trade-off.
+
+## The turbovec method
+
+`TurbovecRetriever` matches on **meaning** instead of shared tokens: each
+document is embedded with a `sentence-transformers` model (default
+`all-MiniLM-L6-v2`, d=384) and ranked by inner-product similarity, so
+paraphrases and synonyms — lexical retrieval's blind spot — still match.
+The index is built with
+[turbovec](https://github.com/RyanCodrai/turbovec)'s TurboQuant
+quantizer, which is **data-oblivious**: a fixed random rotation plus
+per-coordinate calibration derived from math rather than learned from the
+corpus. That gives two practical properties — no training phase and no
+rebuild as documents are added (unlike FAISS IVF/PQ), and embeddings
+compressed to 2–4 bits/dimension (up to 16× smaller than float32) while
+length-renormalized scoring keeps inner-product estimates unbiased.
+
+The recall ceiling is set by the embedder, not the quantizer: the default
+model is small, free, and offline-installable; swap in a larger embedder
+for paper-grade dense recall at the cost of that provider's API. The
+trade-off in the other direction: exact keyword and identifier matches
+(error codes, proper nouns) can rank lower than BM25 would rank them.
+
 ## The pi-serini method
 
 The `pi-serini` strategy reproduces the reference lexical retriever from
@@ -74,6 +118,48 @@ paper's setup. The trade-off is unchanged at its core: BM25 remains a
 token matcher, so the method's answer to vocabulary mismatch is "retrieve
 deeper," not "match on meaning" — see the selection tables above for when
 `turbovec` or hybrid fusion fits better.
+
+## The hybrid method
+
+`HybridRetriever` runs the lexical and turbovec arms over the same corpus
+and fuses their rankings at search time with reciprocal rank fusion:
+
+> Gordon V. Cormack, Charles L. A. Clarke, and Stefan Buettcher.
+> *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank
+> Learning Methods.* SIGIR 2009.
+
+RRF scores each candidate by `sum(1 / (k + rank))` across every ranking
+it appears in — it needs only rank positions, never the incomparable raw
+scores of different scorers, which is what makes fusing a BM25 ranking
+with a cosine-similarity ranking sound. A document that both arms rank
+moderately well beats one that a single arm ranks highly, hedging each
+method's characteristic failure mode (lexical's vocabulary mismatch,
+dense's weak exact-identifier precision). See [hybrid
+fusion](../how-to/hybrid-fusion.md) for usage, the `k` and `weights`
+knobs, and consolidating more than two rankings.
+
+## The tree-sitter method
+
+`TreeSitterRetriever` changes the *chunking*, not the ranking. Files are
+parsed with tree-sitter and split at AST node boundaries following the
+cAST method:
+
+> Yilin Zhang, Xinran Zhao, Zora Zhiruo Wang, Chenyang Yang, Jiayi Wei,
+> and Tongshuang Wu. *cAST: Enhancing Code Retrieval-Augmented Generation
+> with Structural Chunking via Abstract Syntax Tree.* arXiv:2506.15655,
+> 2025. <https://arxiv.org/abs/2506.15655>
+
+The chunker greedily merges consecutive sibling nodes while their
+combined non-whitespace character count fits a budget, recurses into
+nodes too large to fit alone, and hard-splits only leaf nodes that still
+don't fit — so a hit's span is a complete, syntactically coherent unit
+(a function, a class, a block) instead of an arbitrary character window.
+Every chunk also carries a dotted breadcrumb of its enclosing scopes
+(e.g. `Bar.baz` for a method inside a class), which is prefixed into the
+ranked text so a query can match on scope names alone. Ranking is then
+the same TF-IDF + BM25 + RRF as the lexical method — tree-sitter is only
+needed at chunking time, and it inherits lexical's vocabulary-mismatch
+limitation.
 
 ## Graceful degradation rationale
 

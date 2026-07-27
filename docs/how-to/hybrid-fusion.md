@@ -7,7 +7,9 @@ Raise `k` to flatten the influence of rank position; lower it to weight top
 ranks more heavily. `weights` is an optional, same-length list of per-ranking
 multipliers — `None` (the default) weights every ranking `1.0`, which is
 numerically identical to the unweighted fusion every existing caller already
-relies on.
+relies on. The method itself (Cormack et al., SIGIR 2009) and why
+rank-based fusion is sound across incomparable scorers are covered in
+[The hybrid method](../concepts/retrieval-strategies.md#the-hybrid-method).
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"

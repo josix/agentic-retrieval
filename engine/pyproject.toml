@@ -1,6 +1,6 @@
 [project]
 name = "agentic-retrieval"
-version = "0.7.0"
+version = "0.7.1"
 description = "Fully offline contextual RAG retrieval experiment"
 requires-python = ">=3.10"
 license = "MIT"
