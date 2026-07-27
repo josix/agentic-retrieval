@@ -11,6 +11,9 @@
 | `RuntimeError: call index() before search()` | Called `.search()` before `.index()`/`.build()` succeeded | Always index first; if index failed with a `RuntimeError`, fix that first |
 | `uv: command not found` | `uv` isn't installed | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 
+In the `pi-serini` row above, both spellings are correct: `pi-serini` is
+the retriever key, `pyserini` is the Python library/extra it needs.
+
 For anything not covered here, the four knowledge skills
 (`skills/lexical-retrieval-usage`, `skills/dense-retrieval-usage`,
 `skills/lucene-retrieval-usage`, `skills/hybrid-retrieval-usage`) each have

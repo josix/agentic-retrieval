@@ -77,6 +77,7 @@ DEFAULT_EXCLUDE_DIRS = frozenset(
         "venv",
         "env",
         "node_modules",
+        "vendor",
         "__pycache__",
         ".claude",
         "dist",

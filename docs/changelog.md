@@ -6,8 +6,11 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
-## Unreleased
+## 0.7.0 — 2026-07-27
 
+- **\[engine\]** `vendor/` added to `DEFAULT_EXCLUDE_DIRS` in
+  `project_loader`, so vendored third-party code is skipped during file
+  discovery like `node_modules` and `venv` already are.
 - **\[engine\]** Pluggable tokenizer modes (`plain`/`code`) on `TfidfIndex` and
   `BM25Index`. `"code"` mode emits each whole token's lowercased subtokens
   (split on `_`/`-`/`.` and camelCase/PascalCase boundaries) after the whole
@@ -61,6 +64,18 @@ both.
   can't silently drift again. This explains why on-disk caches built during
   the 0.6.0 development window may show differing `engine_version` values
   in their `meta.json` depending on exactly which commit produced them.
+- **\[docs\] Docs-only disambiguation.** The README, docs home, per-retriever
+  how-to, troubleshooting table, the `lucene-retrieval-usage` skill, and the
+  `PiSeriniRetriever` docstring now state explicitly that `pi-serini` (the
+  strategy/registry key from the Pi-Serini paper) and `pyserini` (the
+  Castorini library and install extra) are distinct names, not a typo for
+  each other. No identifier, CLI flag, registry key, cache filename, class
+  name, or extra name changed.
+- **\[docs\] Pi-Serini method explainer.** `docs/concepts/retrieval-strategies.md`
+  gains a "The pi-serini method" section with the full paper citation
+  (Hsu, Yang, Lin — *Rethinking Agentic Search with Pi-Serini: Is Lexical
+  Retrieval Sufficient?*, arXiv:2605.10848): the retrieve-deeper thesis,
+  BrowseComp-Plus results, and the `k1=25, b=1` tuning rationale.
 
 ## 0.6.0 — 2026-07-25
 

@@ -10,6 +10,13 @@ backed by Pyserini/Anserini — the reference lexical retriever from
 [pi-serini](https://github.com/justram/pi-serini) ("Rethinking Agentic Search
 with Pi-Serini: Is Lexical Retrieval Sufficient?").
 
+`pi-serini` and `pyserini` are two different names, and neither is a typo
+for the other: `pi-serini` is the retrieval *strategy* from the paper above
+(and this plugin's registry key / `--retriever` value), while `pyserini` is
+the Castorini Python library — and this repo's install extra — that the
+strategy is implemented on top of. Wherever both appear on the same line
+below, the difference is deliberate.
+
 ## What it is
 
 `PiSeriniRetriever` builds an in-memory Lucene inverted index

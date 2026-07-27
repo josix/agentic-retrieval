@@ -23,6 +23,10 @@ comparison retrievers — if their extra isn't installed, calling `.index()`
 (or, for `treesitter`, `load_ast_chunk_documents()`) raises a `RuntimeError`
 with install instructions rather than crashing silently.
 
+`pi-serini` (the strategy and registry key, named after the Pi-Serini
+paper) and `pyserini` (the Castorini Python library and install extra it
+runs on) are two different names, not a typo for each other.
+
 ## Install
 
 All Python dependencies are managed by [`uv`](https://docs.astral.sh/uv/) —

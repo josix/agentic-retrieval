@@ -20,7 +20,8 @@ Compare six retrieval strategies on the invoking project's own files
    TurboQuant. Needs `sentence-transformers` + `turbovec`, installed by setup.
 4. **pi-serini** — Lucene BM25 via Pyserini, the reference lexical retriever
    from the Pi-Serini paper. Needs `pyserini` (installed by setup) + a Java 21
-   JDK.
+   JDK. (pi-serini names the strategy; pyserini names the library — both
+   spellings are correct.)
 5. **hybrid** — lexical + dense arms over the same corpus, fused with RRF at
    search time. Needs the same extras as turbovec.
 6. **treesitter** — the same lexical BM25+TF-IDF+RRF ranking over AST-boundary

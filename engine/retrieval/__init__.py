@@ -3,7 +3,7 @@
 Re-exports the public API used by the plugin's skills and the test suite.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 from retrieval.bm25 import BM25Index
 from retrieval.chunker import Chunk, chunk_document

@@ -391,6 +391,10 @@ class PiSeriniRetriever:
 
     Builds an in-memory Lucene index over the corpus and queries it with
     Pyserini's ``LuceneSearcher``.  Requires Java 21 (Pyserini wraps Anserini).
+
+    ``pi-serini`` (the strategy and registry key, from the Pi-Serini paper)
+    and ``pyserini`` (the library and install extra) are distinct names,
+    not a typo for each other.
     """
 
     name = "pi-serini (lucene bm25)"
