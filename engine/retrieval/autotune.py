@@ -119,7 +119,44 @@ def _decide_bm25_b(
     return 0.3
 
 
-def _decide_bit_width(n_chunks: Optional[int]) -> int:
+#: sentence-transformers models ``_decide_embed_model`` chooses between,
+#: mapped to their embedding dimensionality (``_decide_bit_width`` sizes the
+#: quantized index from it). An unknown/override model falls back to 384.
+_EMBED_MODEL_DIMS = {
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+    "sentence-transformers/all-mpnet-base-v2": 768,
+    "flax-sentence-embeddings/st-codesearch-distilroberta-base": 768,
+}
+
+#: chunk count at or below which the corpus is small enough that the slower,
+#: higher-quality mpnet embedder is worth the per-chunk embedding cost.
+_SMALL_CORPUS_CHUNKS = 2000
+
+
+def _decide_embed_model(code_fraction: float, n_chunks: Optional[int]) -> str:
+    """Turbovec/hybrid embedding model, from corpus content and size.
+
+    Content first: a code-dominated corpus (>0.6 code bytes, same threshold
+    as the ``bm25_k1`` code tier) gets a code-search-trained embedder —
+    prose-trained MiniLM/mpnet embed identifiers poorly. Otherwise size
+    decides the quality/cost tradeoff: embedding cost scales linearly with
+    chunk count, so a small corpus (<= ``_SMALL_CORPUS_CHUNKS`` chunks)
+    affords the higher-quality mpnet, while a large one keeps the fast
+    MiniLM static default. No pass-2 chunk count at all (empty corpus)
+    degrades to the MiniLM static default, like every other heuristic.
+    """
+    if n_chunks is None:
+        # static default (empty corpus / no pass-2 stats) — must match the
+        # TurbovecRetriever ctor default so the no-signal path is a no-op
+        return "sentence-transformers/all-MiniLM-L6-v2"
+    if code_fraction > 0.6:
+        return "flax-sentence-embeddings/st-codesearch-distilroberta-base"
+    if n_chunks <= _SMALL_CORPUS_CHUNKS:
+        return "sentence-transformers/all-mpnet-base-v2"
+    return "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def _decide_bit_width(n_chunks: Optional[int], embed_dims: int = 384) -> int:
     # NOTE: the originally specified tiers were 8/4/2, but the installed
     # turbovec.TurboQuantIndex only accepts bit_width in {2, 3, 4} (raises
     # ValueError otherwise — confirmed empirically, see the deviation noted
@@ -127,7 +164,7 @@ def _decide_bit_width(n_chunks: Optional[int]) -> int:
     # intended ordering (smaller corpus -> higher precision).
     if not n_chunks:
         return 4  # static default: no pass-2 chunk count (empty corpus)
-    total = n_chunks * 384
+    total = n_chunks * embed_dims
     if total <= 5e7:
         return 4
     if total <= 5e8:
@@ -249,6 +286,11 @@ def resolve_params(
     """
     policy = _decide_chunking_policy(signals.code_fraction, signals.median_code_lines)
     lucene_k1, lucene_b = _decide_lucene_params(signals.p50_chunk_tokens)
+    # An explicit model override participates early so bit_width is sized
+    # from the dimensionality of the model actually used, not the auto pick.
+    model_name = (overrides or {}).get("model_name") or _decide_embed_model(
+        signals.code_fraction, signals.n_chunks
+    )
     params: Dict[str, Any] = {
         **policy.to_dict(),
         "tokenizer": _decide_tokenizer(signals.code_fraction),
@@ -256,7 +298,10 @@ def resolve_params(
         "bm25_b": _decide_bm25_b(
             signals.chunk_token_cv, signals.p50_chunk_tokens, signals.p90_chunk_tokens
         ),
-        "bit_width": _decide_bit_width(signals.n_chunks),
+        "model_name": model_name,
+        "bit_width": _decide_bit_width(
+            signals.n_chunks, _EMBED_MODEL_DIMS.get(model_name, 384)
+        ),
         "lucene_k1": lucene_k1,
         "lucene_b": lucene_b,
     }

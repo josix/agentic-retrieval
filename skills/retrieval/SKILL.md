@@ -105,12 +105,54 @@ once with `index`, then search it (as many times as you like) with `query`:
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
 uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all \
-  retrieval index --root "$PROJECT_ROOT"
+  retrieval index --root "$PROJECT_ROOT" --auto
 
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
 uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all \
-  retrieval query "your query here" --root "$PROJECT_ROOT" --top-k 5
+  retrieval query "your query here" --root "$PROJECT_ROOT" --auto
 ```
+
+### Hyperparameters are YOUR decision (made inline, at index/query time)
+
+You — the invoking agent — decide the hyperparameter values and pass them
+directly on the `index` and `query` commands. There is no separate tuning
+step to run first. Precedence is **explicit flag > `--auto`-derived >
+static default**, applied per flag, so you can take the auto-derived
+baseline and override only the knobs you have a reason to set.
+
+At **index time**, always pass `--auto` (as in the snippet above) so the
+engine derives a corpus-calibrated baseline (tokenizer mode, chunk sizes,
+BM25 `k1`/`b`, turbovec embedding model + `bit_width`, Lucene `k1`/`b`)
+from measured corpus
+signals instead of static defaults. Then layer explicit overrides for
+anything you already know about the corpus or the coming queries:
+
+| You know / observe | Pass on `index` |
+| --- | --- |
+| Corpus is mostly code, or mostly prose (overriding the auto guess) | `--tokenizer code` / `--tokenizer plain` |
+| Queries will be long/verbose natural language | `--bm25-k1 1.8` (raise term saturation) |
+| Chunk lengths are uniform / wildly varied | `--bm25-b 0.3` / `--bm25-b 1.0` |
+| Functions or sections are being split mid-definition | `--code-chars` / `--target-chars` / `--ast-max-chars` (larger) |
+| Recall matters more than memory (small corpus) | `--bit-width 4` |
+| A specific embedding model fits the domain | `--embed-model <name>` |
+| Long documents indexed as few big chunks | `--lucene-k1 25 --lucene-b 1` |
+
+At **query time**, pass `--auto` to resolve `top_k` from the index's
+persisted corpus stats, or an explicit `--top-k N` when you know how many
+candidates you want (explicit wins; static default is 5). In consolidated
+mode you also own the fusion: `--weights "name:w,..."` to bias retrievers
+you trust for this question's shape (see the routing table), and `--pool N`
+to deepen each retriever's candidate pool for recall-critical questions.
+
+Your decisions persist: `index` records the resolved values in each
+strategy's cache meta (`hyperparams` + `corpus_stats`, visible via
+`retrieval stats`), later rebuilds — including query-triggered
+auto-reindexes — reuse them rather than reverting to defaults, and passing
+*different* values marks the cache stale and rebuilds with the new ones.
+So decide once at index time, re-decide only when the corpus or your
+retrieval quality observations change. To validate a decision
+data-driven, `retrieval eval` (see `docs/how-to/evaluate-retrievers.md`)
+compares configurations against labeled queries.
 
 `index` with no `--retriever` (the default, equivalent to `--retriever all`)
 builds every default strategy — `lexical` (TF-IDF + BM25 fused with RRF, the

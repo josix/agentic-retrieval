@@ -115,6 +115,45 @@ class TestResolveParamsBFormula(unittest.TestCase):
         self.assertEqual(params["bm25_k1"], 1.5)
 
 
+class TestResolveParamsEmbedModel(unittest.TestCase):
+    """model_name is decided from corpus content (code fraction) and size
+    (chunk count), coupled to bit_width via the chosen model's dims."""
+
+    def test_code_heavy_corpus_picks_code_search_model(self) -> None:
+        signals = CorpusSignals(n_files=5, code_fraction=0.8, n_chunks=100)
+        params = resolve_params(signals)
+        self.assertEqual(
+            params["model_name"],
+            "flax-sentence-embeddings/st-codesearch-distilroberta-base",
+        )
+
+    def test_small_prose_corpus_affords_quality_model(self) -> None:
+        signals = CorpusSignals(n_files=5, code_fraction=0.1, n_chunks=100)
+        params = resolve_params(signals)
+        self.assertEqual(params["model_name"], "sentence-transformers/all-mpnet-base-v2")
+
+    def test_large_prose_corpus_keeps_fast_default(self) -> None:
+        signals = CorpusSignals(n_files=500, code_fraction=0.1, n_chunks=50_000)
+        params = resolve_params(signals)
+        self.assertEqual(params["model_name"], "sentence-transformers/all-MiniLM-L6-v2")
+
+    def test_empty_corpus_falls_back_to_static_default_model(self) -> None:
+        params = resolve_params(CorpusSignals(n_files=0))
+        self.assertEqual(params["model_name"], "sentence-transformers/all-MiniLM-L6-v2")
+
+    def test_bit_width_sized_from_chosen_model_dims(self) -> None:
+        # 100_000 chunks: * 384 dims = 3.84e7 <= 5e7 -> 4, but the small-
+        # corpus threshold is exceeded so MiniLM (384) applies; with a
+        # 768-dim override the same corpus crosses into the 3-bit tier.
+        signals = CorpusSignals(n_files=500, code_fraction=0.1, n_chunks=100_000)
+        self.assertEqual(resolve_params(signals)["bit_width"], 4)
+        overridden = resolve_params(
+            signals, overrides={"model_name": "sentence-transformers/all-mpnet-base-v2"}
+        )
+        self.assertEqual(overridden["model_name"], "sentence-transformers/all-mpnet-base-v2")
+        self.assertEqual(overridden["bit_width"], 3)
+
+
 class TestResolveParamsOverrides(unittest.TestCase):
     def test_explicit_overrides_always_win(self) -> None:
         signals = CorpusSignals(n_files=3, code_fraction=0.9, n_chunks=10, mean_chunk_tokens=200.0)
