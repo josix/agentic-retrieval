@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from retrieval import __version__
+from retrieval import __version__, extractors
 from retrieval.autotune import (
     CorpusSignals,
     collect_signals,
@@ -44,9 +44,15 @@ from retrieval.persistence import (
     index_dir,
     is_stale,
     load_index,
+    loader_kw_from_meta,
     save_index,
 )
-from retrieval.project_loader import load_ast_chunk_documents, load_chunk_documents
+from retrieval.project_loader import (
+    DEFAULT_EXTENSIONS,
+    discover_files,
+    load_ast_chunk_documents,
+    load_chunk_documents,
+)
 from retrieval.retrievers import (
     PiSeriniRetriever,
     Retriever,
@@ -61,6 +67,13 @@ _RETRIEVER_CHOICES = (
 _DEFAULT_INDEX_SET = ("lexical", "turbovec", "pi-serini", "hybrid", "treesitter")
 _INDEX_RETRIEVER_CHOICES = _RETRIEVER_CHOICES + ("all",)
 _QUERY_RETRIEVER_CHOICES = _RETRIEVER_CHOICES + ("all",)
+
+#: lexical+ctx issues one LLM call per chunk-Document at index time, so a
+#: large corpus can be slow/expensive; ``index --retriever lexical+ctx``
+#: warns above ``_LEXICAL_CTX_WARN_CHUNKS`` and refuses (absent
+#: ``--allow-large-context``) above ``_LEXICAL_CTX_HARD_LIMIT_CHUNKS``.
+_LEXICAL_CTX_WARN_CHUNKS = 500
+_LEXICAL_CTX_HARD_LIMIT_CHUNKS = 2000
 
 
 def _resolve_root(root_arg: Optional[str]) -> Path:
@@ -114,6 +127,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     index_parser.add_argument("--lucene-k1", type=float, default=None)
     index_parser.add_argument("--lucene-b", type=float, default=None)
+    index_parser.add_argument(
+        "--allow-large-context", action="store_true",
+        help="skip the 'lexical+ctx' large-corpus guard (see "
+        f"_LEXICAL_CTX_HARD_LIMIT_CHUNKS={_LEXICAL_CTX_HARD_LIMIT_CHUNKS}); "
+        "each chunk costs one LLM call at index time",
+    )
+    index_parser.add_argument(
+        "--no-pdf", action="store_true",
+        help="exclude PDFs from discovery (escape hatch for the default "
+        "auto-activated PDF sidecar-extraction pipeline); sticky across "
+        "later flag-less 'index'/'query' calls via the persisted meta",
+    )
 
     query_parser = subparsers.add_parser(
         "query", help="search the persisted index for a project root"
@@ -213,6 +238,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "recorded in the report as 'auto_params'",
     )
 
+    extract_parser = subparsers.add_parser(
+        "extract",
+        help="pre-warm PDF sidecar transcripts for a project root, without "
+        "building/touching any retriever index",
+    )
+    extract_parser.add_argument(
+        "--root", help="project root to extract from (default: RETRIEVAL_ROOT or cwd)"
+    )
+    extract_parser.add_argument(
+        "--force", action="store_true",
+        help="re-extract every PDF even if its cached sidecar is already fresh",
+    )
+    extract_parser.add_argument(
+        "--prune", action="store_true",
+        help="remove manifest entries and sidecar files for PDFs no longer "
+        "present under --root",
+    )
+    extract_parser.add_argument(
+        "--json", action="store_true", help="emit a JSON summary instead of one line per file"
+    )
+
     return parser
 
 
@@ -227,19 +273,40 @@ def _make_retriever(
     return build_retriever(retriever_name, params)
 
 
+def _loader_kw_from_args(args: argparse.Namespace) -> Dict[str, Any]:
+    """Resolve the ``discover_files``/``compute_fingerprint`` loader kwargs
+    an ``index``-time invocation of *args* implies.
+
+    ``{}`` unless ``--no-pdf`` was given (``args`` lacks ``no_pdf`` entirely
+    on subparsers other than ``index``, e.g. ``eval``), in which case PDFs
+    are excluded from discovery for this run. Persisted verbatim into meta
+    via ``save_index``'s ``loader_kw`` and rehydrated by
+    ``persistence.loader_kw_from_meta`` on every later flag-less
+    ``index``/``query`` call, so passing ``--no-pdf`` once at index time is
+    sticky.
+    """
+    if getattr(args, "no_pdf", False):
+        return {"extensions": frozenset(DEFAULT_EXTENSIONS - extractors.EXTRACTABLE_EXTENSIONS)}
+    return {}
+
+
 def _documents_for(
-    root: Path, retriever_name: str, policy: Optional[ChunkingPolicy] = None
+    root: Path,
+    retriever_name: str,
+    policy: Optional[ChunkingPolicy] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ):
     """Return the chunk-granularity Documents to index for *retriever_name*.
 
     ``treesitter`` uses AST-boundary chunks (carrying a ``context``
     breadcrumb); every other retriever uses the line-based chunker. *policy*
     (default ``None`` -> ``DEFAULT_POLICY``, today's flat 400-char chunking)
-    picks each file's chunk-size bucket by suffix.
+    picks each file's chunk-size bucket by suffix. *loader_kw* is forwarded
+    to ``discover_files`` (via the loader functions' ``**kw``).
     """
     if retriever_name == "treesitter":
-        return load_ast_chunk_documents(root, policy=policy)
-    return load_chunk_documents(root, policy=policy)
+        return load_ast_chunk_documents(root, policy=policy, **(loader_kw or {}))
+    return load_chunk_documents(root, policy=policy, **(loader_kw or {}))
 
 
 #: --index-flag -> params-dict key, for the hyperparameter overrides an
@@ -272,14 +339,16 @@ def _overrides_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def _resolve_index_params(
-    root: Path, args: argparse.Namespace
+    root: Path, args: argparse.Namespace, loader_kw: Optional[Dict[str, Any]] = None
 ) -> "tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[ChunkingPolicy]]":
     """Resolve ``(params, corpus_stats, policy)`` for ``index``/``eval``
     with precedence explicit flag > auto-derived > static default.
 
     Returns ``(None, None, None)`` — reproducing today's behavior exactly,
     with no ``hyperparams``/``corpus_stats`` meta block written — when
-    neither ``--auto`` nor any hyperparameter flag was given.
+    neither ``--auto`` nor any hyperparameter flag was given. *loader_kw*
+    (default ``None`` -> ``{}``) is forwarded into ``collect_signals`` when
+    ``--auto`` was given.
     """
     overrides = _overrides_from_args(args)
     if not args.auto and not any(v is not None for v in overrides.values()):
@@ -287,7 +356,7 @@ def _resolve_index_params(
 
     corpus_stats: Optional[Dict[str, Any]] = None
     if args.auto:
-        signals = collect_signals(root)
+        signals = collect_signals(root, loader_kw=loader_kw)
         params = resolve_params(signals, overrides)
         corpus_stats = {
             "n_chunks": signals.n_chunks,
@@ -309,20 +378,24 @@ def _build_and_save(
     params: Optional[Dict[str, Any]] = None,
     corpus_stats: Optional[Dict[str, Any]] = None,
     policy: Optional[ChunkingPolicy] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> Retriever:
     """Build a fresh retriever over *root* and persist it; return the retriever."""
-    fingerprint = compute_fingerprint(root)
+    fingerprint = compute_fingerprint(root, **(loader_kw or {}))
     retriever = _make_retriever(root, retriever_name, params)
-    retriever.index(_documents_for(root, retriever_name, policy))
+    retriever.index(_documents_for(root, retriever_name, policy, loader_kw))
     save_index(
         retriever, root, fingerprint, retriever_name, __version__,
-        params=params, corpus_stats=corpus_stats,
+        params=params, corpus_stats=corpus_stats, loader_kw=loader_kw or None,
     )
     return retriever
 
 
 def _up_to_date_message(
-    root: Path, retriever_name: str, params: Optional[Dict[str, Any]] = None
+    root: Path,
+    retriever_name: str,
+    params: Optional[Dict[str, Any]] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Return a "fast path" message if a fresh, non-stale cache exists for
     *root* + *retriever_name*; ``None`` if there's no cache or it's stale
@@ -332,7 +405,7 @@ def _up_to_date_message(
     if cached is None:
         return None
     _retriever, meta = cached
-    if is_stale(root, meta, params=params):
+    if is_stale(root, meta, params=params, **(loader_kw or {})):
         return None
     return (
         f"{retriever_name} index up to date -> {index_dir(root)}  (use --force to rebuild)"
@@ -345,6 +418,7 @@ def _index_all(
     params: Optional[Dict[str, Any]] = None,
     corpus_stats: Optional[Dict[str, Any]] = None,
     policy: Optional[ChunkingPolicy] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Build every strategy in ``_DEFAULT_INDEX_SET``, skipping (not failing)
     any whose optional extras aren't installed. Only a failure to build the
@@ -360,14 +434,16 @@ def _index_all(
     """
     lexical_failed = False
     for name in _DEFAULT_INDEX_SET:
-        if not force and _up_to_date_message(root, name, params) is not None:
+        if not force and _up_to_date_message(root, name, params, loader_kw) is not None:
             print(f"{name}: up to date (use --force to rebuild)")
             continue
         build_params, build_corpus_stats, build_policy = params, corpus_stats, policy
         if build_params is None:
             build_params, build_corpus_stats, build_policy = _params_for_rebuild(root, name, None)
         try:
-            retriever = _build_and_save(root, name, build_params, build_corpus_stats, build_policy)
+            retriever = _build_and_save(
+                root, name, build_params, build_corpus_stats, build_policy, loader_kw
+            )
             chunk_count = len(retriever.to_dict()["docids"])
             print(f"{name}: indexed {chunk_count} chunks")
         except RuntimeError as exc:
@@ -378,13 +454,41 @@ def _index_all(
     return 1 if lexical_failed else 0
 
 
+def _check_lexical_ctx_guard(
+    retriever_name: str, documents: List[Any], allow_large_context: bool
+) -> None:
+    """Guard against an accidental large/expensive ``lexical+ctx`` index run
+    (one LLM call per chunk-Document): warn to stderr above
+    ``_LEXICAL_CTX_WARN_CHUNKS``, and refuse outright (unless
+    *allow_large_context*) above ``_LEXICAL_CTX_HARD_LIMIT_CHUNKS``. A no-op
+    for every other *retriever_name*.
+    """
+    if retriever_name != "lexical+ctx":
+        return
+    count = len(documents)
+    if count > _LEXICAL_CTX_HARD_LIMIT_CHUNKS and not allow_large_context:
+        raise RuntimeError(
+            f"lexical+ctx would index {count} chunks (> "
+            f"{_LEXICAL_CTX_HARD_LIMIT_CHUNKS}), issuing one LLM call per "
+            "chunk; pass --allow-large-context to proceed anyway, or index "
+            "a smaller root/subtree."
+        )
+    if count > _LEXICAL_CTX_WARN_CHUNKS:
+        print(
+            f"warning: lexical+ctx is about to index {count} chunks "
+            "(one LLM call per chunk) — this may be slow/expensive",
+            file=sys.stderr,
+        )
+
+
 def _cmd_index(args: argparse.Namespace) -> int:
     root = _resolve_root(args.root)
-    params, corpus_stats, policy = _resolve_index_params(root, args)
+    loader_kw = _loader_kw_from_args(args)
+    params, corpus_stats, policy = _resolve_index_params(root, args, loader_kw)
     if args.retriever == "all":
-        return _index_all(root, args.force, params, corpus_stats, policy)
+        return _index_all(root, args.force, params, corpus_stats, policy, loader_kw)
     if not args.force:
-        message = _up_to_date_message(root, args.retriever, params)
+        message = _up_to_date_message(root, args.retriever, params, loader_kw)
         if message is not None:
             print(message)
             return 0
@@ -394,12 +498,14 @@ def _cmd_index(args: argparse.Namespace) -> int:
     # defaults — recover them from its existing meta, if any.
     if params is None:
         params, corpus_stats, policy = _params_for_rebuild(root, args.retriever, None)
-    fingerprint = compute_fingerprint(root)
+    fingerprint = compute_fingerprint(root, **loader_kw)
     retriever = _make_retriever(root, args.retriever, params)
-    retriever.index(_documents_for(root, args.retriever, policy))
+    documents = _documents_for(root, args.retriever, policy, loader_kw)
+    _check_lexical_ctx_guard(args.retriever, documents, args.allow_large_context)
+    retriever.index(documents)
     saved_dir = save_index(
         retriever, root, fingerprint, args.retriever, __version__,
-        params=params, corpus_stats=corpus_stats,
+        params=params, corpus_stats=corpus_stats, loader_kw=loader_kw or None,
     )
     chunk_count = len(retriever.to_dict()["docids"])
     print(f"indexed {chunk_count} chunks -> {saved_dir}  fingerprint={fingerprint[:12]}")
@@ -452,6 +558,18 @@ def _params_for_rebuild(
     return hyperparams, meta.get("corpus_stats"), policy
 
 
+def _rebuild_loader_kw(
+    root: Path, retriever_name: str, meta: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Loader kwargs for a query-triggered rebuild, derived from *meta* (or
+    a best-effort ``_peek_meta`` lookup when *meta* wasn't already loaded) —
+    never from CLI args, so ``query`` never needs a discovery-affecting flag
+    of its own."""
+    if meta is None:
+        meta = _peek_meta(root, retriever_name) or {}
+    return loader_kw_from_meta(meta)
+
+
 def _load_or_rebuild(
     root: Path, retriever_name: str, stale_ok: bool, params: Optional[Dict[str, Any]] = None
 ) -> Retriever:
@@ -461,23 +579,29 @@ def _load_or_rebuild(
     fingerprint/hyperparams) preserves the index's own previously recorded
     hyperparameters — see ``_params_for_rebuild`` — rather than silently
     reverting to static defaults just because the caller didn't pass
-    explicit *params*.
+    explicit *params*. Loader kwargs (extensions/exclude_dirs/etc.) are
+    likewise recovered from the index's own meta (see ``_rebuild_loader_kw``)
+    rather than requiring a query-time flag.
     """
     cached = load_index(root, retriever_name)
     if cached is None:
         rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
             root, retriever_name, params
         )
+        rebuild_loader_kw = _rebuild_loader_kw(root, retriever_name)
         return _build_and_save(
-            root, retriever_name, rebuild_params, rebuild_corpus_stats, rebuild_policy
+            root, retriever_name, rebuild_params, rebuild_corpus_stats, rebuild_policy,
+            rebuild_loader_kw,
         )
     retriever, meta = cached
-    if is_stale(root, meta, params=params) and not stale_ok:
+    rebuild_loader_kw = loader_kw_from_meta(meta)
+    if is_stale(root, meta, params=params, **rebuild_loader_kw) and not stale_ok:
         rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
             root, retriever_name, params, meta
         )
         return _build_and_save(
-            root, retriever_name, rebuild_params, rebuild_corpus_stats, rebuild_policy
+            root, retriever_name, rebuild_params, rebuild_corpus_stats, rebuild_policy,
+            rebuild_loader_kw,
         )
     return retriever
 
@@ -726,12 +850,95 @@ def _cmd_tune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _discover_pdfs(root: Path) -> List[Path]:
+    """PDFs (or any other ``extractors.EXTRACTABLE_EXTENSIONS`` suffix) under
+    *root*, via the default ``discover_files`` eligibility rules."""
+    return [
+        path for path in discover_files(root)
+        if path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS
+    ]
+
+
+def _extract_file_report(rel: str, sidecar: Any, entry: Dict[str, Any]) -> Dict[str, Any]:
+    """One ``retrieval extract`` progress record for *rel*'s *sidecar*
+    result; *entry* is that source's manifest entry (for ``pages``, which
+    ``extractors.Sidecar`` itself doesn't carry)."""
+    return {
+        "source": rel,
+        "sidecar": sidecar.docid,
+        "status": sidecar.status,
+        "reason": sidecar.reason,
+        "pages": entry.get("pages", 0),
+        "chars": len(sidecar.text),
+    }
+
+
+def _prune_orphan_sidecars(root: Path, keep_rel: "set[str]") -> int:
+    """Remove manifest entries + sidecar files whose source PDF is no longer
+    in *keep_rel*; return the number pruned."""
+    manifest = extractors.load_manifest(root)
+    entries = manifest.get("entries", {})
+    orphans = [rel for rel in entries if rel not in keep_rel]
+    for rel in orphans:
+        sidecar_rel = entries[rel].get("sidecar") or extractors.sidecar_relpath(rel)
+        try:
+            (root / sidecar_rel).unlink()
+        except OSError:
+            pass
+    extractors.prune_manifest(root, keep_rel)
+    return len(orphans)
+
+
+def _print_extract_report(
+    file_reports: List[Dict[str, Any]], pruned: int, as_json: bool, root: Path
+) -> None:
+    if as_json:
+        print(json.dumps({"root": str(root), "files": file_reports, "pruned": pruned}))
+        return
+    for report in file_reports:
+        if report["status"] == "ok":
+            print(
+                f"{report['source']} -> {report['sidecar']} "
+                f"({report['pages']} pages, {report['chars']} chars)"
+            )
+        else:
+            print(f"{report['source']}: stub ({report['reason']})")
+    if pruned:
+        print(f"pruned {pruned} orphaned sidecar(s)")
+
+
+def _cmd_extract(args: argparse.Namespace) -> int:
+    """Pre-warm every PDF's sidecar transcript under *args.root*; never
+    builds/touches a retriever index. Hard-fails (guidance ``RuntimeError``,
+    caught by ``main``'s error boundary) only here, when the ``pdf`` extra
+    isn't installed — ``index``/``query`` never do.
+    """
+    root = _resolve_root(args.root)
+    extractors.require_extractors(extractors.EXTRACTABLE_EXTENSIONS)
+    pdf_paths = _discover_pdfs(root)
+    sidecars = {
+        pdf_path.relative_to(root).as_posix(): extractors.ensure_sidecar(
+            root, pdf_path, force=args.force
+        )
+        for pdf_path in pdf_paths
+    }
+    manifest_entries = extractors.load_manifest(root).get("entries", {})
+    file_reports = [
+        _extract_file_report(rel, sidecar, manifest_entries.get(rel, {}))
+        for rel, sidecar in sidecars.items()
+    ]
+    pruned = _prune_orphan_sidecars(root, set(sidecars)) if args.prune else 0
+    _print_extract_report(file_reports, pruned, args.json, root)
+    return 0
+
+
 _COMMANDS = {
     "index": _cmd_index,
     "query": _cmd_query,
     "stats": _cmd_stats,
     "eval": _cmd_eval,
     "tune": _cmd_tune,
+    "extract": _cmd_extract,
 }
 
 

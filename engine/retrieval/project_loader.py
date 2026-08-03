@@ -3,7 +3,12 @@
 Stdlib-only (``os``, ``pathlib``, ``fnmatch``) — no network libraries — so the
 default retrieval pipeline stays fully offline. Discovers text-like files
 under a project root, skipping VCS/dependency/build directories and files
-that look like secrets by name.
+that look like secrets by name. PDFs are discovered like any other file
+(``.pdf`` is part of ``DEFAULT_EXTENSIONS``) and routed through
+``retrieval.extractors`` for a cached, sidecar-transcript ``Document``; the
+``extractors`` module is itself stdlib-only at import scope and only lazily
+imports its optional ``pypdf`` backend, so this module's offline-by-default
+guarantee is unaffected by whether that backend is installed.
 
 A file is eligible for discovery if its suffix is in ``DEFAULT_EXTENSIONS``
 *or* its basename case-insensitively matches ``DEFAULT_INCLUDE_BASENAMES``
@@ -21,6 +26,7 @@ import os
 from pathlib import Path
 from typing import Iterable, List, Optional
 
+from retrieval import extractors
 from retrieval.ast_chunker import chunk_code, language_for_path
 from retrieval.chunker import DEFAULT_POLICY, Chunk, ChunkingPolicy, chunk_document
 from retrieval.document import Document
@@ -66,6 +72,7 @@ DEFAULT_EXTENSIONS = frozenset(
         ".lua",
         ".pl",
     }
+    | extractors.EXTRACTABLE_EXTENSIONS
 )
 
 DEFAULT_EXCLUDE_DIRS = frozenset(
@@ -164,15 +171,24 @@ def _is_eligible_file(
     include_basenames: frozenset,
     exclude_globs: Iterable[str],
     max_bytes: int,
+    extract_max_bytes: int = extractors.EXTRACT_MAX_BYTES,
 ) -> bool:
-    """Return True if *file_path* passes the name allowlist, deny-list, and size checks."""
+    """Return True if *file_path* passes the name allowlist, deny-list, and size checks.
+
+    Two-stage size cap: an extractable suffix (e.g. ``.pdf``) is capped at
+    *extract_max_bytes* instead of *max_bytes* — PDFs are typically much
+    larger than plain-text source files, so applying the same small default
+    cap would silently exclude every real-world PDF.
+    """
     filename = file_path.name
     if not _has_allowed_name(filename, extensions, include_basenames):
         return False
     if _matches_any_glob(filename, exclude_globs):
         return False
+    is_extractable = file_path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS
+    cap = extract_max_bytes if is_extractable else max_bytes
     try:
-        return file_path.stat().st_size <= max_bytes
+        return file_path.stat().st_size <= cap
     except OSError:
         return False
 
@@ -185,6 +201,7 @@ def discover_files(
     exclude_globs: Iterable[str] = DEFAULT_EXCLUDE_GLOBS,
     include_basenames: frozenset = DEFAULT_INCLUDE_BASENAMES,
     max_bytes: int = MAX_FILE_BYTES,
+    extract_max_bytes: int = extractors.EXTRACT_MAX_BYTES,
 ) -> List[Path]:
     """Walk *root* and return sorted, deterministic list of eligible file paths.
 
@@ -192,18 +209,29 @@ def discover_files(
     during ``os.walk`` so excluded subtrees are never descended into. A file
     is eligible if its extension is in *extensions* or its basename
     case-insensitively matches *include_basenames*, and it also passes the
-    filename deny-list and size checks. Symlinks are not followed.
+    filename deny-list and size checks (*max_bytes*, or *extract_max_bytes*
+    for an extractable suffix — see ``_is_eligible_file``). Directory
+    symlinks are followed, with realpath-based tracking so cycles and
+    already-visited subtrees (e.g. a symlink into a directory walked
+    earlier) are skipped rather than re-descended.
     """
     root_path = Path(root)
     found: List[Path] = []
+    visited_real_dirs: set = set()
 
-    for dirpath, dirnames, filenames in os.walk(root_path, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root_path, followlinks=True):
+        real_dir = os.path.realpath(dirpath)
+        if real_dir in visited_real_dirs:
+            dirnames[:] = []
+            continue
+        visited_real_dirs.add(real_dir)
         dirnames[:] = [d for d in dirnames if not _is_excluded_dir(d, exclude_dirs)]
 
         for filename in filenames:
             file_path = Path(dirpath) / filename
             if _is_eligible_file(
-                file_path, extensions, include_basenames, exclude_globs, max_bytes
+                file_path, extensions, include_basenames, exclude_globs, max_bytes,
+                extract_max_bytes,
             ):
                 found.append(file_path)
 
@@ -237,11 +265,23 @@ def load_documents(
     ``docid`` is the file's POSIX-style path relative to *root*; ``url`` is
     left blank (no network association). Files that fail to decode as text
     are skipped.
+
+    An extractable suffix (e.g. ``.pdf``, see
+    ``retrieval.extractors.EXTRACTABLE_EXTENSIONS``) is dispatched to
+    ``extractors.ensure_sidecar`` *before* ``read_text_safe`` — the NUL-byte
+    sniff in ``read_text_safe`` would otherwise classify every PDF as binary
+    and silently drop it. The resulting Document's ``docid`` is the sidecar's
+    project-relative path, so it chunks as prose (``.md`` suffix) and its
+    citations point at the extracted transcript rather than the raw PDF.
     """
     root_path = Path(root)
     documents: List[Document] = []
 
     for file_path in discover_files(root_path, **kw):
+        if file_path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS:
+            sidecar = extractors.ensure_sidecar(root_path, file_path)
+            documents.append(Document(docid=sidecar.docid, text=sidecar.text, url=""))
+            continue
         text = read_text_safe(file_path)
         if text is None:
             continue
@@ -307,6 +347,7 @@ def load_chunk_documents(
                     source_path=document.docid,
                     start_line=chunk.start_line,
                     end_line=chunk.end_line,
+                    context=chunk.heading,
                 )
             )
     return documents

@@ -245,14 +245,17 @@ def _make_eval_retriever(
     return build_retriever(name, params)
 
 
-def _documents_for(root: Path, name: str, policy=None):
+def _documents_for(root: Path, name: str, policy=None, loader_kw: Optional[Dict[str, Any]] = None):
     if name == "treesitter":
-        return load_ast_chunk_documents(root, policy=policy)
-    return load_chunk_documents(root, policy=policy)
+        return load_ast_chunk_documents(root, policy=policy, **(loader_kw or {}))
+    return load_chunk_documents(root, policy=policy, **(loader_kw or {}))
 
 
 def _build_retrievers(
-    root: Path, params: Optional[Dict[str, Any]] = None, policy=None
+    root: Path,
+    params: Optional[Dict[str, Any]] = None,
+    policy=None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Retriever], List[Dict[str, str]], Dict[str, float], Optional[str]]:
     """Build every strategy in ``_STRATEGIES`` in-memory (no persistence),
     skipping (not failing) any whose optional extras are missing.
@@ -268,7 +271,7 @@ def _build_retrievers(
     for name in _STRATEGIES:
         try:
             retriever = _make_eval_retriever(name, tmp_dir_holder, params)
-            documents = _documents_for(root, name, policy)
+            documents = _documents_for(root, name, policy, loader_kw)
             start = time.perf_counter()
             retriever.index(documents)
             build_s[name] = time.perf_counter() - start
@@ -377,6 +380,7 @@ def run_eval(
     k: int = 5,
     warm_runs: int = 5,
     params: Optional[Dict[str, Any]] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> EvalReport:
     """Run the full eval harness over the labeled query set at *queries_path*.
 
@@ -390,14 +394,18 @@ def run_eval(
     *params* (default ``None``, reproducing today's static-default behavior)
     is threaded into each retriever's construction (filtered to its own
     ``ACCEPTS``) and into chunking via a ``ChunkingPolicy`` built from its
-    chunking keys — see ``retrieval.autotune.resolve_params``.
+    chunking keys — see ``retrieval.autotune.resolve_params``. *loader_kw*
+    (default ``None`` -> ``{}``) is forwarded to ``discover_files`` via each
+    strategy's document loader.
     """
     queries_path = Path(queries_path)
     default_root, labeled_queries = _load_labeled_queries(queries_path)
     corpus_root = Path(root) if root is not None else default_root
     policy = ChunkingPolicy.from_dict(params) if params else None
 
-    retrievers, skipped, build_s, tmp_dir = _build_retrievers(corpus_root, params, policy)
+    retrievers, skipped, build_s, tmp_dir = _build_retrievers(
+        corpus_root, params, policy, loader_kw
+    )
     try:
         query_evals = [
             _eval_single_query(query, retrievers, k, warm_runs) for query in labeled_queries

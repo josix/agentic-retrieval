@@ -47,6 +47,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from retrieval import extractors
 from retrieval.chunker import ChunkingPolicy
 from retrieval.project_loader import discover_files
 from retrieval.retrievers import (
@@ -179,7 +180,7 @@ def relevant_params(retriever_name: str, params: Dict[str, Any]) -> Dict[str, An
 
 def _serializable_loader_kw(loader_kw: Dict[str, Any]) -> Dict[str, Any]:
     """JSON-safe form of a loader-kwargs dict: frozensets/sets become sorted
-    lists (restored back into frozensets by ``_loader_kw_from_meta``)."""
+    lists (restored back into frozensets by ``loader_kw_from_meta``)."""
     result: Dict[str, Any] = {}
     for key, value in loader_kw.items():
         if isinstance(value, (frozenset, set)):
@@ -189,7 +190,7 @@ def _serializable_loader_kw(loader_kw: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def _loader_kw_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+def loader_kw_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Rehydrate a meta's persisted ``loader_kw`` block back into the kwargs
     ``discover_files``/``compute_fingerprint`` expect (frozensets for the
     keys that need them)."""
@@ -323,13 +324,20 @@ def is_stale(
     key is always considered stale under any non-``None`` *params*, forcing
     a one-time rebuild that then records the block going forward.
 
+    Also True when ``extractors.needs_reextraction(root)`` — a PDF sidecar
+    was written as a ``backend-missing`` stub before the ``pdf`` extra was
+    installed, and a backend is now available, so the index should be
+    rebuilt to pick up real extracted text.
+
     Explicit *loader_kw* takes precedence for fingerprinting; otherwise the
     loader kwargs are rehydrated from *meta*'s persisted ``"loader_kw"``
-    block (see ``_loader_kw_from_meta``), falling back to ``discover_files``'
+    block (see ``loader_kw_from_meta``), falling back to ``discover_files``'
     own defaults when neither is available.
     """
-    resolved_loader_kw = loader_kw if loader_kw else _loader_kw_from_meta(meta)
+    resolved_loader_kw = loader_kw if loader_kw else loader_kw_from_meta(meta)
     if compute_fingerprint(root, **resolved_loader_kw) != meta.get("fingerprint"):
+        return True
+    if extractors.needs_reextraction(root):
         return True
     if params is None:
         return False

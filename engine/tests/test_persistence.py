@@ -18,16 +18,17 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from retrieval import extractors  # noqa: E402
 from retrieval.bm25 import BM25Index  # noqa: E402
 from retrieval.document import Document  # noqa: E402
 from retrieval.persistence import (  # noqa: E402
-    _loader_kw_from_meta,
     cache_base_dir,
     cached_retrievers,
     compute_fingerprint,
     index_dir,
     is_stale,
     load_index,
+    loader_kw_from_meta,
     project_key,
     relevant_params,
     save_index,
@@ -353,14 +354,109 @@ class TestPersistence(unittest.TestCase):
                 "max_bytes": 500,
             }
         }
-        result = _loader_kw_from_meta(meta)
+        result = loader_kw_from_meta(meta)
         self.assertEqual(result["extensions"], frozenset({".py", ".md"}))
         self.assertEqual(result["exclude_dirs"], frozenset({".git"}))
         self.assertEqual(result["include_basenames"], frozenset({"readme"}))
         self.assertEqual(result["max_bytes"], 500)  # not a frozenset key: passed through
 
     def test_loader_kw_from_meta_empty_when_no_loader_kw_block(self) -> None:
-        self.assertEqual(_loader_kw_from_meta({}), {})
+        self.assertEqual(loader_kw_from_meta({}), {})
+
+    def test_loader_kw_round_trips_through_save_and_load(self) -> None:
+        # T-S1: a frozenset extensions loader_kw survives
+        # save_index -> load_index -> loader_kw_from_meta unchanged.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            loader_kw = {"extensions": frozenset({".py", ".md"})}
+            fingerprint = compute_fingerprint(root, **loader_kw)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root, **loader_kw))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.7.0", loader_kw=loader_kw
+            )
+            _retriever, meta = load_index(root)
+            rehydrated = loader_kw_from_meta(meta)
+            self.assertEqual(rehydrated, loader_kw)
+
+    def test_is_stale_no_kwargs_stable_with_non_default_extensions(self) -> None:
+        # T-S2 (C3 regression): a non-default `extensions` loader_kw
+        # persisted at index time must make `is_stale(root, meta)` (no
+        # kwargs) return False repeatedly — it should rehydrate the loader
+        # kwargs from meta rather than falling back to discover_files'
+        # defaults, which would spuriously flag the persisted index stale.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "note.dat", "asteroid belt lies between mars and jupiter")
+            loader_kw = {"extensions": frozenset({".dat"})}
+            fingerprint = compute_fingerprint(root, **loader_kw)
+            retriever = LexicalRetriever()
+            retriever.index(load_chunk_documents(root, **loader_kw))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.7.0", loader_kw=loader_kw
+            )
+            _retriever, meta = load_index(root)
+            self.assertFalse(is_stale(root, meta))
+            self.assertFalse(is_stale(root, meta))
+
+    def test_is_stale_true_for_different_explicit_extensions(self) -> None:
+        # T-S3: an explicit loader_kw that differs from what's persisted
+        # changes the computed fingerprint, so is_stale must report True.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "note.dat", "asteroid belt lies between mars and jupiter")
+            loader_kw = {"extensions": frozenset({".dat"})}
+            fingerprint = compute_fingerprint(root, **loader_kw)
+            retriever = LexicalRetriever()
+            retriever.index(load_chunk_documents(root, **loader_kw))
+            save_index(
+                retriever, root, fingerprint, "lexical", "0.7.0", loader_kw=loader_kw
+            )
+            _retriever, meta = load_index(root)
+            self.assertTrue(
+                is_stale(root, meta, extensions=frozenset({".txt"}))
+            )
+
+    # -- is_stale + extractors.needs_reextraction (T-S4) ----------------------
+
+    def test_is_stale_false_when_no_pdf_manifest_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.7.0")
+            _retriever, meta = load_index(root)
+            self.assertFalse(is_stale(root, meta))
+
+    def test_is_stale_true_for_backend_missing_manifest_entry_once_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "x.txt", "hello world")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.7.0")
+            _retriever, meta = load_index(root)
+
+            manifest_dir = extractors.extract_dir(root)
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "manifest.json").write_text(
+                '{"entries": {"doc.pdf": {"reason": "backend-missing"}}}',
+                encoding="utf-8",
+            )
+            original = extractors.backend_available
+            extractors.backend_available = lambda: True
+            try:
+                self.assertTrue(is_stale(root, meta))
+            finally:
+                extractors.backend_available = original
+
+    def test_needs_reextraction_false_without_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(extractors.needs_reextraction(pathlib.Path(tmp)))
 
     # -- load_index -----------------------------------------------------------
 

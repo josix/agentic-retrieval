@@ -100,6 +100,21 @@ class TestContextualLexicalRetriever(unittest.TestCase):
         # Real query routing still works on the original text.
         self.assertEqual(r.search("what carries data between networks", top_k=1)[0], "d1")
 
+    def test_enrichment_preserves_document_context_on_search_hit(self) -> None:
+        # T-R1: a Document's `context` breadcrumb (e.g. a chunk heading, see
+        # project_loader.load_chunk_documents) must survive enrichment and
+        # come back on the SearchHit, same as source_path/start_line/end_line.
+        documents = [
+            Document(
+                "d1", "Routers forward packets between networks and carry data.",
+                source_path="net.txt", start_line=1, end_line=1, context="Networking",
+            ),
+        ]
+        r = ContextualLexicalRetriever(contextualizer=lambda text: "CTX")
+        r.index(documents)
+        hit = r.search_detailed("what carries data between networks", top_k=1)[0]
+        self.assertEqual(hit.context, "Networking")
+
     def test_enrichment_does_not_alter_span_metadata(self) -> None:
         """Enrichment only prepends context to `text`; span fields (and
         docid, source_path) must round-trip through index() unchanged."""

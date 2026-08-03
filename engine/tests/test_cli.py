@@ -16,13 +16,20 @@ import tempfile
 import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from test_extractors import _PYPDF_INSTALLED, _write_pdf  # noqa: E402
+
+from retrieval import cli, extractors  # noqa: E402
 from retrieval.cli import main  # noqa: E402
-from retrieval.persistence import index_dir  # noqa: E402
+from retrieval.document import Document  # noqa: E402
+from retrieval.persistence import compute_fingerprint, index_dir, save_index  # noqa: E402
+from retrieval.project_loader import load_chunk_documents  # noqa: E402
+from retrieval.retrievers import LexicalRetriever  # noqa: E402
 
 try:
     import turbovec  # noqa: F401
@@ -704,6 +711,32 @@ class TestCli(unittest.TestCase):
         self.assertIn("indexed 2 chunks ->", out)
         self.assertNotEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
 
+    def test_query_with_persisted_nondefault_extensions_performs_no_rebuild(self) -> None:
+        # A cache built (e.g. by a prior CLI version, or directly via
+        # persistence.save_index) with a non-default `extensions` loader_kw
+        # must be recognized as up to date by a plain `query` — it should
+        # rehydrate the loader kwargs from the cache's own meta rather than
+        # falling back to discover_files' defaults (which would omit the
+        # .dat file and spuriously look stale).
+        _write(self.root / "note.dat", "asteroid belt lies between mars and jupiter")
+        loader_kw = {"extensions": frozenset({".txt", ".dat"})}
+        fingerprint = compute_fingerprint(self.root, **loader_kw)
+        retriever = LexicalRetriever()
+        retriever.index(load_chunk_documents(self.root, **loader_kw))
+        save_index(
+            retriever, self.root, fingerprint, "lexical", "0.7.0", loader_kw=loader_kw
+        )
+        meta_path = index_dir(self.root) / "meta.json"
+        first_mtime_ns = meta_path.stat().st_mtime_ns
+
+        code, out = _run(
+            ["query", "asteroid belt mars jupiter",
+             "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.strip(), "note.dat:1-1")
+        self.assertEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
+
     def test_stats_echoes_hyperparams_and_corpus_stats(self) -> None:
         code, _out = _run(
             ["index", "--root", str(self.root), "--retriever", "lexical", "--bm25-k1", "1.3"]
@@ -712,6 +745,254 @@ class TestCli(unittest.TestCase):
         code, out = _run(["stats", "--root", str(self.root)])
         self.assertEqual(code, 0)
         self.assertIn("hyperparams:", out)
+
+    # -- lexical+ctx large-corpus guard (T-C6) ---------------------------------
+    #
+    # ``lexical+ctx`` issues one LLM call per chunk-Document, so exercising
+    # the "passes with --allow-large-context" / "small corpus unaffected"
+    # paths through a real network call isn't safe in a test environment
+    # without an ANTHROPIC_API_KEY; ``_check_lexical_ctx_guard`` (the pure
+    # decision function ``_cmd_index`` calls before ``retriever.index()``)
+    # is exercised directly instead, plus one full-CLI test proving the
+    # guard actually blocks ``index --retriever lexical+ctx`` end-to-end
+    # (via monkeypatched thresholds so it never has to synthesize 2000+
+    # real chunks).
+
+    def test_lexical_ctx_guard_raises_above_hard_limit_without_flag(self) -> None:
+        documents = [Document(f"d{i}", "x") for i in range(3)]
+        with mock.patch.object(cli, "_LEXICAL_CTX_HARD_LIMIT_CHUNKS", 2):
+            with self.assertRaises(RuntimeError) as ctx:
+                cli._check_lexical_ctx_guard("lexical+ctx", documents, False)
+        self.assertIn("--allow-large-context", str(ctx.exception))
+
+    def test_lexical_ctx_guard_allows_above_hard_limit_with_flag(self) -> None:
+        documents = [Document(f"d{i}", "x") for i in range(3)]
+        with mock.patch.object(cli, "_LEXICAL_CTX_HARD_LIMIT_CHUNKS", 2):
+            cli._check_lexical_ctx_guard("lexical+ctx", documents, True)  # must not raise
+
+    def test_lexical_ctx_guard_warns_above_warn_threshold_below_hard_limit(self) -> None:
+        documents = [Document(f"d{i}", "x") for i in range(3)]
+        with mock.patch.object(cli, "_LEXICAL_CTX_WARN_CHUNKS", 2), mock.patch.object(
+            cli, "_LEXICAL_CTX_HARD_LIMIT_CHUNKS", 10
+        ):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                cli._check_lexical_ctx_guard("lexical+ctx", documents, False)
+        self.assertIn("warning", err.getvalue())
+
+    def test_lexical_ctx_guard_small_corpus_unaffected(self) -> None:
+        documents = [Document("d0", "x"), Document("d1", "y")]
+        err = io.StringIO()
+        with redirect_stderr(err):
+            cli._check_lexical_ctx_guard("lexical+ctx", documents, False)  # must not raise
+        self.assertEqual(err.getvalue(), "")
+
+    def test_lexical_ctx_guard_is_a_noop_for_other_retrievers(self) -> None:
+        documents = [Document(f"d{i}", "x") for i in range(3)]
+        with mock.patch.object(cli, "_LEXICAL_CTX_HARD_LIMIT_CHUNKS", 2):
+            cli._check_lexical_ctx_guard("lexical", documents, False)  # must not raise
+
+    def test_index_lexical_ctx_blocked_end_to_end_without_flag(self) -> None:
+        # Full _cmd_index plumbing: the guard fires before retriever.index()
+        # is ever reached, so this needs no network access.
+        with mock.patch.object(cli, "_LEXICAL_CTX_HARD_LIMIT_CHUNKS", 1):
+            code, _out, err = _run_with_stderr(
+                ["index", "--root", str(self.root), "--retriever", "lexical+ctx"]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("--allow-large-context", err)
+        # Confirm no cache was ever written (the guard raised before index()).
+        self.assertFalse((index_dir(self.root) / "lexical.json").exists())
+
+    def test_index_lexical_ctx_all_mode_never_triggers_guard(self) -> None:
+        # lexical+ctx is deliberately excluded from _DEFAULT_INDEX_SET, so
+        # the 'all' path must never even consult the guard.
+        with mock.patch.object(cli, "_LEXICAL_CTX_HARD_LIMIT_CHUNKS", 0):
+            code, _out = _run(["index", "--root", str(self.root), "--force"])
+        self.assertEqual(code, 0)
+
+
+class TestCliPdfAutoActivation(unittest.TestCase):
+    """CLI-surface coverage for auto-activated PDF indexing (WP-B): the
+    ``--no-pdf`` escape hatch, the ``extract`` subcommand, and the
+    end-to-end index/query path over a PDF-containing tree."""
+
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        _write(self.root / "a.txt", "routers forward packets between networks and carry data")
+
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+        extractors.clear_process_cache()
+        extractors._WARNED = False
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+        self._project_tmp.cleanup()
+        extractors.clear_process_cache()
+        extractors._WARNED = False
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_index_then_query_on_pdf_tree_is_stable_and_cites_sidecar(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        _write_pdf(pdf_path, pages=2)
+
+        code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+        meta_path = index_dir(self.root) / "meta.json"
+        first_mtime_ns = meta_path.stat().st_mtime_ns
+        first_created_at = json.loads(meta_path.read_text())["created_at"]
+
+        code, out = _run(
+            [
+                "query", "wonderful indeed spanning multiple lines reflow logic",
+                "--root", str(self.root), "--retriever", "lexical", "--top-k", "1",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(".agentic-retrieval/extracted/docs/paper.pdf.md", out)
+        # No rebuild: meta is untouched by the flag-less query.
+        self.assertEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
+        self.assertEqual(json.loads(meta_path.read_text())["created_at"], first_created_at)
+
+    @unittest.skipIf(_PYPDF_INSTALLED, "pypdf installed; degradation path not exercised")
+    def test_index_succeeds_without_pypdf_with_one_warning_and_stub(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        code, out, err = _run_with_stderr(
+            ["index", "--root", str(self.root), "--retriever", "lexical"]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("indexed", out)
+        self.assertEqual(err.count("pypdf is not installed"), 1)
+
+        manifest = extractors.load_manifest(self.root)
+        entry = manifest["entries"]["docs/paper.pdf"]
+        self.assertEqual(entry["status"], "stub")
+        self.assertEqual(entry["reason"], "backend-missing")
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_extraction_happens_once_per_pdf_under_index_auto(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        _write_pdf(pdf_path, pages=2)
+
+        counter = {"n": 0}
+        original = extractors._EXTRACTORS[".pdf"]
+
+        def counting_extractor(data: bytes):
+            counter["n"] += 1
+            return original(data)
+
+        extractors._EXTRACTORS[".pdf"] = counting_extractor
+        try:
+            code, _out = _run(["index", "--root", str(self.root), "--auto"])
+        finally:
+            extractors._EXTRACTORS[".pdf"] = original
+        self.assertEqual(code, 0)
+        self.assertEqual(counter["n"], 1)
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_query_json_on_pdf_corpus_includes_page_breadcrumb(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        _write_pdf(pdf_path, pages=2)
+
+        code, out = _run(
+            [
+                "query", "wonderful indeed spanning multiple lines reflow logic",
+                "--root", str(self.root), "--retriever", "lexical",
+                "--top-k", "1", "--json",
+            ]
+        )
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertIn("Page", payload["results"][0]["context"])
+
+    def test_no_pdf_flag_excludes_pdfs_and_is_sticky(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        code, _out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--no-pdf"]
+        )
+        self.assertEqual(code, 0)
+        sidecar_dir = self.root / ".agentic-retrieval" / "extracted"
+        self.assertFalse(sidecar_dir.exists())
+
+        meta_path = index_dir(self.root) / "meta.json"
+        first_mtime_ns = meta_path.stat().st_mtime_ns
+
+        # Flag-less query afterward: --no-pdf is sticky via the persisted
+        # meta, so this must not rebuild (and must not touch the PDF).
+        code, _out = _run(
+            [
+                "query", "routers forward packets", "--root", str(self.root),
+                "--retriever", "lexical", "--top-k", "1",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(meta_path.stat().st_mtime_ns, first_mtime_ns)
+        self.assertFalse(sidecar_dir.exists())
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_extract_subcommand_creates_sidecars_force_and_prune(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        _write_pdf(pdf_path, pages=2)
+
+        code, out = _run(["extract", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        sidecar_path = (
+            self.root / ".agentic-retrieval" / "extracted" / "docs" / "paper.pdf.md"
+        )
+        self.assertTrue(sidecar_path.exists())
+        self.assertIn(
+            "docs/paper.pdf -> .agentic-retrieval/extracted/docs/paper.pdf.md", out
+        )
+        self.assertIn("pages", out)
+        first_mtime_ns = sidecar_path.stat().st_mtime_ns
+
+        time.sleep(0.01)
+        code, out = _run(["extract", "--root", str(self.root), "--force"])
+        self.assertEqual(code, 0)
+        self.assertNotEqual(sidecar_path.stat().st_mtime_ns, first_mtime_ns)
+
+        pdf_path.unlink()
+        code, out = _run(["extract", "--root", str(self.root), "--prune"])
+        self.assertEqual(code, 0)
+        self.assertIn("pruned 1", out)
+        self.assertFalse(sidecar_path.exists())
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_extract_json_summary(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        _write_pdf(pdf_path, pages=1)
+
+        code, out = _run(["extract", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(len(payload["files"]), 1)
+        self.assertEqual(payload["files"][0]["source"], "docs/paper.pdf")
+        self.assertEqual(payload["files"][0]["status"], "ok")
+        self.assertEqual(payload["pruned"], 0)
+
+    @unittest.skipIf(_PYPDF_INSTALLED, "pypdf installed; guidance path not exercised")
+    def test_extract_without_pypdf_exits_nonzero_with_guidance(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        code, _out, err = _run_with_stderr(["extract", "--root", str(self.root)])
+        self.assertEqual(code, 1)
+        self.assertEqual(err.count("error:"), 1)
+        self.assertIn(".[pdf]", err)
 
 
 if __name__ == "__main__":

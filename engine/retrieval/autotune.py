@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from retrieval import project_loader
+from retrieval import extractors, project_loader
 from retrieval.ast_chunker import LANGUAGE_BY_SUFFIX
 from retrieval.chunker import ChunkingPolicy
 from retrieval.tfidf import tokenize
@@ -201,15 +201,21 @@ def resolve_top_k(corpus_stats: Optional[Dict[str, Any]]) -> int:
 
 
 def collect_signals(
-    root: "Path | str", *, tokenizer_for_pass2: Optional[str] = None
+    root: "Path | str",
+    *,
+    tokenizer_for_pass2: Optional[str] = None,
+    loader_kw: Optional[Dict[str, Any]] = None,
 ) -> CorpusSignals:
     """Two-pass ``CorpusSignals`` collection over *root* (see module
     docstring). *tokenizer_for_pass2* overrides the pass-1-derived
     tokenizer mode used to token-count pass-2 chunks (mainly for tests);
     left ``None``, pass 2 uses whatever pass 1's ``code_fraction`` implies.
+    *loader_kw* (default ``None`` -> ``{}``) is forwarded to
+    ``discover_files``/``load_chunk_documents``.
     """
     root = Path(root)
-    files = project_loader.discover_files(root)
+    loader_kw = loader_kw or {}
+    files = project_loader.discover_files(root, **loader_kw)
     ext_histogram: Counter = Counter(f.suffix.lower() for f in files)
 
     total_bytes = 0
@@ -220,6 +226,19 @@ def collect_signals(
             size = file_path.stat().st_size
         except OSError:
             continue
+        if file_path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS:
+            # Substitute the extracted transcript's length for the raw PDF
+            # byte size: raw bytes wildly overstate a PDF's actual indexed
+            # text volume (fonts/images/xref bloat), which would otherwise
+            # skew total_bytes (and downstream size-based heuristics) high.
+            # ensure_sidecar is cache-backed, so this is cheap after the
+            # first pass. code_bytes/code_fraction stay keyed on raw size
+            # for non-extractable (source-code) suffixes only, untouched.
+            try:
+                sidecar = extractors.ensure_sidecar(root, file_path)
+                size = len(sidecar.text)
+            except (RuntimeError, OSError):
+                pass
         total_bytes += size
         if file_path.suffix.lower() in LANGUAGE_BY_SUFFIX:
             code_bytes += size
@@ -236,7 +255,7 @@ def collect_signals(
     pass1_policy = _decide_chunking_policy(code_fraction, median_code_lines)
     tokenizer_mode = tokenizer_for_pass2 or _decide_tokenizer(code_fraction)
 
-    chunk_documents = project_loader.load_chunk_documents(root, policy=pass1_policy)
+    chunk_documents = project_loader.load_chunk_documents(root, policy=pass1_policy, **loader_kw)
     chunk_token_counts = sorted(len(tokenize(d.text, tokenizer_mode)) for d in chunk_documents)
 
     signals = CorpusSignals(

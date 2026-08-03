@@ -1,9 +1,9 @@
-- package rename
+- package rename v
 - index with line numbers + context v
-- persist in project root
-- PDF (media files)
+- persist in project root v
+- auto-routing v
+- dense retrieval/okapi hyperparameter v
+- PDF (media files) v
 - MCP
 - textrank
-- auto-routing
 - graphify
-- dense retrieval/okapi hyperparameter

@@ -23,6 +23,8 @@ retrieval stats [--root ROOT]
 
 retrieval eval --queries PATH [--root PATH] [--k 5] [--warm-runs 5]
                [--json] [--output PATH]
+
+retrieval extract [--root ROOT] [--force] [--prune] [--json]
 ```
 
 ## `index`
@@ -32,8 +34,10 @@ Build and persist an index for a project root.
 | Flag | Default | Purpose |
 | --- | --- | --- |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to index |
-| `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid}` | **`all`** | Retriever(s) to build |
+| `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid,treesitter}` | **`all`** | Retriever(s) to build |
 | `--force` | off | Rebuild even if a fresh (non-stale) cache already exists |
+| `--no-pdf` | off | Exclude PDFs from discovery — an escape hatch for the default auto-activated PDF sidecar-extraction pipeline (see [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)). Persisted in the cache's meta, so it's sticky across later flag-less `index`/`query` calls |
+| `--allow-large-context` | off | Skip the `lexical+ctx` large-corpus guard (warns above 500 chunks, refuses above 2000 without this flag — each chunk costs one LLM call at index time) |
 
 Each retriever has its own cache slot per project, so e.g. a fresh
 `lexical` cache never short-circuits a `hybrid` build.
@@ -165,6 +169,42 @@ Builds every strategy in `lexical`, `turbovec`, `pi-serini`, `hybrid`,
 whose optional extras are missing — same graceful-degradation convention as
 `index`/`query`'s default mode. Exit code `0` as long as `lexical` produced
 results; `1` only if even `lexical` is unusable.
+
+## `extract`
+
+Pre-warm every PDF's sidecar transcript under a project root, without
+building or touching any retriever index — useful for pre-warming a large
+corpus's extraction cache ahead of time (e.g. in CI, or before a first
+`index` run) so that `index`/`query` don't pay the extraction cost inline.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to extract from |
+| `--force` | off | Re-extract every PDF even if its cached sidecar is already fresh |
+| `--prune` | off | Remove manifest entries and sidecar files for PDFs no longer present under `--root` |
+| `--json` | off | Emit a JSON summary instead of one progress line per file |
+
+Discovers PDFs the same way `index`/`query` do (`discover_files` with
+default kwargs), then calls `retrieval.extractors.ensure_sidecar` on each.
+This is the **only** place PDF extraction hard-fails when the `pdf` extra
+isn't installed: a preflight `require_extractors` call raises a guidance
+`RuntimeError` (exit code 1, `error: PDF extraction needs the 'pdf'
+extra:\n  uv pip install -e '.[pdf]'` on stderr) before any file is touched
+— `index`/`query` never do this; they degrade to backend-missing stubs
+instead (see [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)).
+
+Text-mode output is one line per PDF:
+
+```
+docs/paper.pdf -> .agentic-retrieval/extracted/docs/paper.pdf.md (12 pages, 34521 chars)
+docs/scan.pdf: stub (no-text-layer)
+```
+
+`--json` emits `{"root": "<path>", "files": [{"source", "sidecar",
+"status", "reason", "pages", "chars"}, ...], "pruned": <int>}`. Exit code
+`0` on success even if some PDFs produced stubs (a stub is still a valid,
+searchable sidecar) — non-zero exit is reserved for the missing-`pdf`-extra
+preflight failure.
 
 ## Exit codes
 

@@ -6,6 +6,50 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.8.0 — 2026-08-03
+
+- **\[engine\] PDFs in the project tree are now indexed automatically**, via
+  Markdown sidecar transcripts — no flag needed. New `retrieval.extractors`
+  module (stdlib-only at import scope) writes each PDF's extracted text to
+  `<root>/.agentic-retrieval/extracted/<rel-path>.md`, keyed by a
+  content-hash + extractor-version manifest so re-extraction is a no-op on
+  unchanged files across `index --auto`'s multiple loader passes. With the
+  `pdf` extra installed (`pypdf`, included in the `all` extra), a PDF yields
+  a real page-by-page transcript (dehyphenated, reflowed, running
+  header/footer stripped); without it, a searchable placeholder stub is
+  written instead, with a one-time `warning: pypdf is not installed` line on
+  stderr per process — `index`/`query` never hard-fail on a missing `pypdf`
+  backend. `.pdf` joined `project_loader.DEFAULT_EXTENSIONS`, with a
+  two-stage discovery size cap (`extract_max_bytes`, 25MB, vs. the existing
+  1MB plain-text cap) so real-world PDFs aren't silently excluded.
+- **\[engine\]** New `--no-pdf` flag on `index` (opt-out of PDF
+  auto-activation), persisted in the cache's `meta.loader_kw` and therefore
+  sticky across later flag-less `index`/`query` calls.
+- **\[engine\]** New `retrieval extract` subcommand pre-warms every PDF's
+  sidecar transcript under a project root without touching any retriever
+  index — `--force` re-extracts, `--prune` removes manifest entries/sidecar
+  files for PDFs no longer present, `--json` emits a machine-readable
+  summary. This is the *only* place PDF extraction hard-fails (a guidance
+  `RuntimeError`) when the `pdf` extra isn't installed.
+- **\[engine\] Fix:** the CLI's `loader_kw` (extensions/exclusions/size caps)
+  is now actually threaded from `index`-time flags into fingerprinting and
+  persisted cache metadata (`_loader_kw_from_args`, previously a stub
+  returning `{}`) — a latent staleness bug where a loader-affecting flag
+  wouldn't reliably trigger a rebuild.
+- **\[engine\] Fix:** `load_chunk_documents`'s `Document.context` is now
+  populated from each chunk's `heading` (previously left at its default),
+  so the lexical retriever's citations/consolidated-hit `context` field
+  carries a real breadcrumb (e.g. a PDF sidecar's `## Page N` heading)
+  instead of being blank; `ContextualLexicalRetriever.index` no longer drops
+  that `context` when rebuilding its enriched Documents.
+- **\[engine\]** `index --retriever lexical+ctx` (one LLM call per chunk)
+  now warns above 500 chunks and refuses outright above 2000 chunks unless
+  `--allow-large-context` is passed, guarding against an accidentally
+  expensive/slow index run on a large corpus.
+- **Upgrade note:** a project containing PDFs will rebuild its index once on
+  the first `index`/`query` call after upgrading (new discovery eligibility
+  for `.pdf`, changed fingerprint); PDF-free projects are unaffected.
+
 ## 0.7.1 — 2026-07-27
 
 - **\[docs\] Method explainers for every strategy.**

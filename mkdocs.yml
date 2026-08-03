@@ -82,6 +82,7 @@ nav:
           - retrievers: reference/api/retrievers.md
           - document: reference/api/document.md
           - project_loader: reference/api/project_loader.md
+          - extractors: reference/api/extractors.md
           - fusion: reference/api/fusion.md
           - consolidation: reference/api/consolidation.md
           - contextualizers: reference/api/contextualizers.md

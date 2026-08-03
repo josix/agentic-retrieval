@@ -1,6 +1,6 @@
 [project]
 name = "agentic-retrieval"
-version = "0.7.1"
+version = "0.8.0"
 description = "Fully offline contextual RAG retrieval experiment"
 requires-python = ">=3.10"
 license = "MIT"
@@ -39,8 +39,12 @@ pyserini = ["pyserini"]
 # to tree-sitter itself (0.24.0-0.25.2 are all clean; tree-sitter-language-
 # pack version is not implicated). See retrieval/ast_chunker.py::chunk_code.
 treesitter = ["tree-sitter>=0.24,<0.26", "tree-sitter-language-pack"]
-# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter)
-all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter]"]
+# PDF text extraction (sidecar-transcript indexing). pypdf is pure Python
+# with zero deps on py3.11+ (BSD-3); capped below 7 as a routine major-bump
+# guard, same convention as the treesitter pin above.
+pdf = ["pypdf>=6,<7"]
+# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter + pdf)
+all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter,pdf]"]
 # Dev tooling
 dev = ["ruff", "isort", "complexipy"]
 

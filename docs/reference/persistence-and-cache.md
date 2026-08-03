@@ -119,6 +119,26 @@ warning below now applies only to overrides.
     cache dirname is fair game for re-indexing. Point `RETRIEVAL_INDEX_DIR`
     outside the project root instead.
 
+## PDF sidecars + extraction manifest live under the project root
+
+`retrieval.extractors` writes PDF sidecar transcripts and their manifest
+under `<project-root>/.agentic-retrieval/extracted/` — deliberately
+**always** under the indexed root, even when `RETRIEVAL_INDEX_DIR` redirects
+the retriever caches described above to a shared external directory. A
+sidecar is a citation target a coding agent `Read()`s by project-relative
+path (`docs/paper.pdf` indexes as
+`.agentic-retrieval/extracted/docs/paper.pdf.md`), so it has to live inside
+the tree being indexed regardless of where the retriever cache itself is
+kept.
+
+The extraction cache (`.agentic-retrieval/extracted/manifest.json`) is keyed
+on each source file's SHA-256 content hash plus the extractor's own version
+string (`extractors.EXTRACTOR_VERSION`) — a content change or an extractor
+upgrade both force re-extraction; an unchanged file across repeated calls
+(e.g. `index --auto`'s multiple loader passes in one run) is a cache hit.
+See [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)
+and the [`extractors` API reference](api/extractors.md).
+
 ## Schema versioning
 
 Each persistable retriever carries its own `SCHEMA_VERSION`, bumped

@@ -15,9 +15,12 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from retrieval import extractors  # noqa: E402
 from retrieval.chunker import ChunkingPolicy  # noqa: E402
+from retrieval.persistence import compute_fingerprint  # noqa: E402
 from retrieval.project_loader import (  # noqa: E402
     DEFAULT_EXCLUDE_GLOBS,
+    DEFAULT_EXTENSIONS,
     MAX_FILE_BYTES,
     discover_files,
     load_ast_chunk_documents,
@@ -244,6 +247,23 @@ class TestProjectLoader(unittest.TestCase):
             source_paths = {d.source_path for d in docs}
             self.assertEqual(source_paths, {"a.py"})
 
+    def test_load_chunk_documents_carries_heading_as_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "doc.md", "## Heading\n\nSome body text under the heading.\n")
+            docs = load_chunk_documents(root, extensions=frozenset({".md"}))
+            self.assertGreater(len(docs), 0)
+            self.assertTrue(any(d.context == "Heading" for d in docs))
+
+    def test_load_chunk_documents_headingless_file_has_empty_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "plain.txt", "just some plain body text, no heading at all.\n")
+            docs = load_chunk_documents(root, extensions=frozenset({".txt"}))
+            self.assertGreater(len(docs), 0)
+            for doc in docs:
+                self.assertEqual(doc.context, "")
+
 
 @unittest.skipUnless(_TREESITTER_INSTALLED, "tree-sitter-language-pack not installed")
 class TestLoadAstChunkDocuments(unittest.TestCase):
@@ -312,6 +332,156 @@ class TestLoadAstChunkDocumentsGracefulDegradation(unittest.TestCase):
             _write(root / "app.py", "def foo():\n    return 1\n")
             with self.assertRaises(RuntimeError):
                 load_ast_chunk_documents(root)
+
+
+class TestPdfAutoActivation(unittest.TestCase):
+    """WP-A: PDFs are discovered by default (no import-probing, no opt-in
+    flag) — eligibility must stay deterministic regardless of whether the
+    ``pdf`` extra happens to be installed in a given environment."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    def test_pdf_is_discovered_by_default(self) -> None:
+        # T-P1 (inverted): a .pdf file IS discovered without any opt-in.
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "manual.pdf", pages=1)
+            discovered = {p.relative_to(root).as_posix() for p in discover_files(root)}
+            self.assertIn("manual.pdf", discovered)
+
+    def test_discovery_and_fingerprint_identical_regardless_of_backend(self) -> None:
+        # T-P1b: eligibility/fingerprinting never probes pypdf importability.
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "manual.pdf", pages=1)
+            _write(root / "notes.txt", "some notes")
+            files_before = sorted(p.relative_to(root).as_posix() for p in discover_files(root))
+            fp_before = compute_fingerprint(root)
+
+            original = extractors.backend_available
+            extractors.backend_available = lambda: False
+            try:
+                files_after = sorted(
+                    p.relative_to(root).as_posix() for p in discover_files(root)
+                )
+                fp_after = compute_fingerprint(root)
+            finally:
+                extractors.backend_available = original
+
+            self.assertEqual(files_before, files_after)
+            self.assertEqual(fp_before, fp_after)
+
+    def test_extensions_override_minus_extractable_excludes_pdfs(self) -> None:
+        # T-P2 (repurposed): an explicit `extensions=` narrower than
+        # DEFAULT_EXTENSIONS still fully overrides (no implicit PDF re-add).
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "manual.pdf", pages=1)
+            _write(root / "notes.txt", "some notes")
+            narrow = DEFAULT_EXTENSIONS - extractors.EXTRACTABLE_EXTENSIONS
+            discovered = {
+                p.relative_to(root).as_posix() for p in discover_files(root, extensions=narrow)
+            }
+            self.assertNotIn("manual.pdf", discovered)
+            self.assertIn("notes.txt", discovered)
+
+    def test_two_stage_size_cap_pdf_vs_txt(self) -> None:
+        # T-P3: a 2MB PDF is discovered (under extract_max_bytes), a 30MB
+        # PDF is not (over it), and a 2MB .txt is not (over max_bytes).
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "small.pdf", pages=1)
+            # pad small.pdf up to ~2MB by appending a big PDF comment.
+            with open(root / "small.pdf", "ab") as fh:
+                fh.write(b"\n%" + b"a" * (2_000_000 - (root / "small.pdf").stat().st_size))
+            _write(root / "big.txt", "a" * 2_000_000)
+
+            discovered = {p.relative_to(root).as_posix() for p in discover_files(root)}
+            self.assertIn("small.pdf", discovered)
+            self.assertNotIn("big.txt", discovered)
+
+            discovered_tiny_cap = {
+                p.relative_to(root).as_posix()
+                for p in discover_files(root, extract_max_bytes=1_000)
+            }
+            self.assertNotIn("small.pdf", discovered_tiny_cap)
+
+    def test_chunk_docids_and_spans_resolve_to_sidecar_lines(self) -> None:
+        # T-P4: chunk docid uses the sidecar path; spans resolve to real
+        # lines in the sidecar file on disk.
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "manual.pdf", pages=1)
+            docs = load_chunk_documents(root, extensions=frozenset({".pdf"}))
+            self.assertGreater(len(docs), 0)
+            for doc in docs:
+                self.assertTrue(
+                    doc.docid.startswith(".agentic-retrieval/extracted/manual.pdf.md:")
+                )
+                self.assertEqual(doc.source_path, ".agentic-retrieval/extracted/manual.pdf.md")
+                sidecar_path = root / doc.source_path
+                self.assertTrue(sidecar_path.exists())
+                lines = sidecar_path.read_text(encoding="utf-8").splitlines()
+                self.assertLessEqual(doc.end_line, len(lines))
+                self.assertGreaterEqual(doc.start_line, 1)
+
+    @unittest.skipIf(_TREESITTER_INSTALLED, "tree-sitter-language-pack is installed")
+    def test_ast_loader_falls_back_to_line_chunking_for_sidecar_docs(self) -> None:
+        # T-P6: a sidecar's docid has no tree-sitter-mapped suffix (it's
+        # ".md"), so load_ast_chunk_documents line-chunks it like any other
+        # non-code file — this must not require the treesitter extra.
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "manual.pdf", pages=1)
+            docs = load_ast_chunk_documents(root, extensions=frozenset({".pdf"}))
+            self.assertGreater(len(docs), 0)
+            for doc in docs:
+                self.assertEqual(doc.context, "")
+
+    def test_sidecar_is_never_itself_discovered(self) -> None:
+        # T-P7: no double-indexing — the sidecar lives under the already-
+        # excluded .agentic-retrieval dir.
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write_pdf(root / "manual.pdf", pages=1)
+            load_documents(root, extensions=frozenset({".pdf"}))  # writes the sidecar
+            discovered = {p.relative_to(root).as_posix() for p in discover_files(root)}
+            self.assertFalse(any(".agentic-retrieval" in d for d in discovered))
+
+    def test_no_pdf_tree_discovery_and_fingerprint_unchanged(self) -> None:
+        # T-P8: a tree with no PDFs discovers/fingerprints identically to
+        # the pre-PDF extension set.
+        pre_pdf_extensions = DEFAULT_EXTENSIONS - extractors.EXTRACTABLE_EXTENSIONS
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "a.py", "x = 1\n")
+            _write(root / "b.md", "# doc\n\nsome text\n")
+            with_pdf_default = sorted(
+                p.relative_to(root).as_posix() for p in discover_files(root)
+            )
+            without_pdf_ext = sorted(
+                p.relative_to(root).as_posix()
+                for p in discover_files(root, extensions=pre_pdf_extensions)
+            )
+            self.assertEqual(with_pdf_default, without_pdf_ext)
+            self.assertEqual(
+                compute_fingerprint(root), compute_fingerprint(root, extensions=pre_pdf_extensions)
+            )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,11 @@ indexes over: chunks at tree-sitter node boundaries when a file's language is
 supported, carrying an enclosing function/class breadcrumb (`context`), and
 falling back to the line-based chunker per file otherwise.
 
+PDFs are discovered like any other file (`.pdf` is part of
+`DEFAULT_EXTENSIONS`) and routed through `retrieval.extractors` for a
+cached, sidecar-transcript `Document` before the usual text-decode step —
+see the [`extractors` API reference](extractors.md).
+
 ::: retrieval.project_loader
 
 ## Keyword-only overrides
@@ -20,6 +25,7 @@ falling back to the line-based chunker per file otherwise.
 | `exclude_globs` | `DEFAULT_EXCLUDE_GLOBS` | Filename deny-list globs (secret-looking names) |
 | `include_basenames` | `DEFAULT_INCLUDE_BASENAMES` | Extensionless basenames allowed regardless of `extensions` (e.g. add `'justfile'`) |
 | `max_bytes` | `MAX_FILE_BYTES` (1 MB) | Per-file size cap |
+| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (`.pdf`) instead of `max_bytes` — PDFs are typically much larger than plain-text source files |
 
 See [customize indexing](../../how-to/customize-indexing.md) for runnable
 examples of each override.

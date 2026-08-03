@@ -182,6 +182,31 @@ class TestDeterminism(unittest.TestCase):
         self.assertEqual(resolve_params(signals), resolve_params(signals))
 
 
+class TestAutotunePdfByteAccounting(unittest.TestCase):
+    """T-A1: a large PDF dropped into a code-dominated corpus must not flip
+    the corpus's code-vs-prose signals — ``collect_signals`` substitutes the
+    extracted sidecar transcript's (small) length for the PDF's raw byte
+    size when accounting ``total_bytes``, so a bulky PDF never dilutes
+    ``code_fraction`` the way its raw size would."""
+
+    def test_large_pdf_does_not_flip_code_dominated_signals(self) -> None:
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            body = "\n\n".join(f"def fn_{i}():\n    return {i} * 2\n" for i in range(60))
+            _write(root / "app.py", body)
+            _write(root / "lib.py", body)
+            baseline = collect_signals(root)
+            self.assertGreater(baseline.code_fraction, 0.6)
+
+            _write_pdf(root / "manual.pdf", pages=30)
+            with_pdf = collect_signals(root)
+            self.assertGreater(with_pdf.code_fraction, 0.6)
+            self.assertEqual(resolve_params(with_pdf)["tokenizer"], "code")
+            self.assertEqual(resolve_params(with_pdf)["code_chars"], 1200)
+
+
 class TestAnchorSyntheticCorpus(unittest.TestCase):
     """A synthetic (hand-built) CorpusSignals landing in the "typical mixed
     repo" band this engine's own tuning aims at: mostly-code with some docs,

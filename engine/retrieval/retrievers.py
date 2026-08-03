@@ -205,9 +205,9 @@ class ContextualLexicalRetriever(LexicalRetriever):
 
     def index(self, documents: List[Document]) -> None:
         # Enrichment only ever alters `text` (prepending LLM-generated
-        # context); span metadata (source_path/start_line/end_line) is
-        # carried through unchanged so results still resolve to the
-        # original file:line location.
+        # context); span metadata (source_path/start_line/end_line) and the
+        # document's own `context` breadcrumb are carried through unchanged
+        # so results still resolve to the original file:line location.
         contextualize = self._ensure_contextualizer()
         enriched = [
             Document(
@@ -217,6 +217,7 @@ class ContextualLexicalRetriever(LexicalRetriever):
                 source_path=d.source_path,
                 start_line=d.start_line,
                 end_line=d.end_line,
+                context=d.context,
             )
             for d in documents
         ]

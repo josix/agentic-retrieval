@@ -191,6 +191,20 @@ missing extra, exit 1 — `query` never silently falls back); pass
 location, chunk count, file count, creation time, and staleness without
 searching.
 
+**PDFs are auto-indexed.** A PDF under the project root is discovered and
+indexed automatically, no flag needed — it's routed through a cached
+sidecar-transcript extraction, and its `source_path` in search hits points
+at `.agentic-retrieval/extracted/<original-relpath>.md` (e.g.
+`docs/paper.pdf` -> `.agentic-retrieval/extracted/docs/paper.pdf.md`) rather
+than the original PDF. `Read()` it exactly like any other hit; line 1 is an
+HTML comment naming the original PDF (`<!-- source: <relpath> -->`), so the
+provenance is still visible. Without the `pdf` extra installed, a PDF still
+indexes as a searchable placeholder stub instead of a real transcript (one
+`warning: pypdf is not installed` line on stderr). Pass `--no-pdf` on
+`index` to opt out entirely; pre-warm a large corpus's PDF sidecars ahead of
+a first `index`/`query` with `retrieval extract` (see
+`docs/reference/cli.md`).
+
 ### `query`'s default is consolidated (all strategies, one ranked list)
 
 `query` with **no `--retriever` flag** (equivalent to `--retriever all`)
