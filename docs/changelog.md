@@ -6,6 +6,103 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.9.0 — 2026-08-17
+
+- **\[engine\] Agent-authored PDF sidecar transcripts** — on clients without
+  the `pdf` extra, the invoking coding agent can now build a usable PDF
+  index itself instead of leaving placeholder stubs. New
+  `retrieval.extractors.register_sidecar(root, source, transcript)` writes
+  a durable sidecar from a hand-authored transcript (no `pypdf` import on
+  any path), stamped `extractor_version: "agent-authored/1"`
+  (`AGENT_EXTRACTOR_VERSION`) plus `authored_by: "agent"`, `authored_at`,
+  and `sidecar_sha256` manifest fields. New `agent_sidecar_revision(entry)`
+  and `sidecar_states(root, sources)` helpers back the CLI surface below.
+  New `invalidate_process_cache(source)` drops a source's process-level
+  memo so a freshly registered sidecar is served immediately instead of a
+  stale in-process stub.
+- **\[engine\]** New `retrieval sidecar` subcommand — `--list` reports
+  every discovered PDF's sidecar state (`missing`/`outdated`/
+  `agent-authored`/`stub`/`ok`); `--register SOURCE --transcript PATH|-`
+  registers a hand-authored transcript (reading from a file or stdin).
+  Unlike `extract`, `sidecar` never imports/requires `pypdf` on either
+  mode.
+- **\[engine\]** `retrieval.persistence.compute_fingerprint` now mixes an
+  agent-authored PDF's `sidecar_sha256` into that file's fingerprint line
+  (`"relpath|size|mtime|sidecar_sha256"` instead of the base
+  `"relpath|size|mtime"`), so re-registering a changed transcript over an
+  otherwise-unchanged source PDF still triggers a reindex. A corpus with no
+  agent-authored entries fingerprints byte-identically to the pre-0.9.0
+  format (invariant covered by a dedicated regression test).
+- **\[engine\] Supersede policy:** an agent-authored sidecar is never
+  silently replaced once `pypdf` becomes available —
+  `needs_reextraction`/`_is_cache_hit`'s backend-missing check stay pinned
+  on the literal `reason == "backend-missing"` string, which an
+  agent-authored entry never has. The one escape hatch is `retrieval
+  extract --force`, which now prints `warning: overwriting N
+  agent-authored sidecar(s) with pypdf output` to stderr before doing so.
+- **\[engine\]** `_is_cache_hit` hardened: `extractor_version` is now
+  membership in `_ACCEPTED_EXTRACTOR_VERSIONS` (both pypdf and
+  agent-authored) rather than equality against one constant, and a
+  manifest entry missing `status`/`sidecar` is now treated as a cache miss
+  (triggering re-extraction) instead of a latent `KeyError`.
+- **\[engine\]** `require_extractors`'s guidance `RuntimeError` and the
+  `backend-missing` stub's own text both now point at `retrieval sidecar
+  --register` as the no-install alternative to the `pdf` extra.
+- **\[plugin\]** `skills/retrieval/SKILL.md`: new "Without the `pdf`
+  extra: author the transcript yourself" subsection walks the agent
+  through detect -> read -> write -> register -> reindex -> verify, plus
+  two new guardrails (never fabricate transcript content; never hand-edit
+  a sidecar `.md` file).
+- **\[plugin\] Media extraction is delegated to the agent by default** —
+  the skill's Step 1 sync (and the `setup` dispatcher) now installs every
+  strategy extra EXCEPT `pdf`, making agent-authored transcripts the
+  standard media-indexing path rather than a fallback: after `index`, the
+  `pypdf is not installed` warning is the agent's cue to run the sidecar
+  workflow immediately, so the media index is built before any query
+  needs it. Adding `--extra pdf` (or `setup pdf`/`setup all`) remains the
+  explicit opt-in for pypdf machine extraction (bulk text-native corpora,
+  headless `retrieval extract` pre-warms) — the engine's pypdf path is
+  unchanged. Step 2's `uv run` snippets carry the same extras list as
+  Step 1, since `uv run` re-syncs the environment to the extras named on
+  each invocation.
+- **\[docs\]** New `## sidecar` section in the CLI reference; agent-authored
+  manifest keys and fingerprint-revision behavior documented in
+  [persistence-and-cache.md](reference/persistence-and-cache.md);
+  `register_sidecar`/`sidecar_states`/supersede policy documented in
+  [api/extractors.md](reference/api/extractors.md); new troubleshooting
+  entry for placeholder-stub PDF results; `commands/retrieval.md` and
+  [customize-indexing.md](how-to/customize-indexing.md) point at the new
+  workflow.
+- **\[engine\] Sidecar mechanism extended to agent-only media** — the
+  sidecar-extraction pipeline now also covers `.docx`, `.pptx`, `.xlsx`,
+  `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` (`AGENT_ONLY_EXTENSIONS`), none
+  of which have a machine extractor at all. Every such file always indexes
+  as an `"agent-only"`-reason stub (distinct from PDF's `backend-missing`,
+  so it never falsely self-heals once pypdf becomes available); a
+  one-time-per-process stderr note points at `retrieval sidecar
+  --register` as the only indexing path. `EXTRACTABLE_EXTENSIONS` is now
+  the union of the new `MACHINE_EXTRACTABLE_EXTENSIONS` (`.pdf`) and
+  `AGENT_ONLY_EXTENSIONS`, so discovery/fingerprinting/`register_sidecar`
+  validation extend to the new suffixes automatically; `require_extractors`
+  now only preflights `MACHINE_EXTRACTABLE_EXTENSIONS`. `retrieval extract`
+  stays PDF-only — it never attempts agent-only media — and its `--prune`
+  keep-set was fixed to cover every discovered sidecar-eligible file (not
+  just PDFs), so a registered agent-only sidecar is no longer deleted by
+  `extract --prune`.
+
+**Upgrade note:** no existing index is invalidated by this release —
+fingerprints stay byte-identical for corpora with no agent-authored
+sidecar entries. An agent-authored transcript, once registered, is never
+superseded by a later `pdf`-extra install (only `retrieval extract
+--force` overwrites it, and only for PDFs). Adding the new agent-only
+media suffixes to discovery does change the fingerprint for any corpus
+that **contains** `.docx`/`.pptx`/`.xlsx`/image files under its indexed
+root: such a corpus reindexes once, automatically, on the next
+`index`/`query` after upgrading, picking up the newly discovered files as
+`agent-only` stubs. A corpus with none of these file types is unaffected.
+Future work: extend the sidecar mechanism to audio/video — deliberately
+excluded here since agents can't yet reliably transcribe them natively.
+
 ## 0.8.0 — 2026-08-03
 
 - **\[engine\] PDFs in the project tree are now indexed automatically**, via

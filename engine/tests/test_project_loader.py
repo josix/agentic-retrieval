@@ -484,5 +484,33 @@ class TestPdfAutoActivation(unittest.TestCase):
             )
 
 
+class TestAgentOnlyMediaDiscovery(unittest.TestCase):
+    """A ``.png``/``.docx`` under root is discovered like a PDF and routed
+    through ``ensure_sidecar`` — the NUL-byte sniff in ``read_text_safe``
+    must never be reached for these suffixes (it would classify them as
+    binary and silently drop them)."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    def test_png_is_discovered_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "diagram.png").write_bytes(b"\x00not a real png\x00payload")
+            discovered = {p.relative_to(root).as_posix() for p in discover_files(root)}
+            self.assertIn("diagram.png", discovered)
+
+    def test_docx_is_routed_through_ensure_sidecar_not_dropped_by_nul_sniff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "report.docx").write_bytes(b"\x00not a real docx\x00payload")
+            documents = load_documents(root)
+            docids = {doc.docid for doc in documents}
+            self.assertIn(".agentic-retrieval/extracted/report.docx.md", docids)
+            docx_sidecar = ".agentic-retrieval/extracted/report.docx.md"
+            doc = next(d for d in documents if d.docid == docx_sidecar)
+            self.assertIn("sidecar --register", doc.text)
+
+
 if __name__ == "__main__":
     unittest.main()

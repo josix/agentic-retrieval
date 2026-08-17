@@ -58,16 +58,26 @@ Follow these steps in order. Do not skip steps.
 ### Step 1 — Ensure uv is available, then sync the environment
 
 `uv` is the hard requirement for this path. Guard for it, then `uv sync`
-the engine's environment with every optional extra — `uv sync` is
-idempotent, so it is always safe to re-run:
+the engine's environment with every retrieval-strategy extra — `uv sync`
+is idempotent, so it is always safe to re-run.
+
+**Media extraction is delegated to YOU, the invoking agent — the `pdf`
+extra (pypdf) is deliberately NOT part of the default sync.** You read
+PDFs natively and author their transcripts yourself (see "Without the
+`pdf` extra: author the transcript yourself" in Step 2), so pypdf is an
+optional tool you *may* choose to add — `--extra pdf` — when bulk machine
+extraction is the better fit (many large text-native PDFs, or a headless
+`retrieval extract` pre-warm). Choosing the extraction tool is your call,
+made here at sync time:
 
 ```bash
 if ! command -v uv >/dev/null 2>&1; then
     echo "uv is required. Install: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
     exit 1
 fi
+EXTRAS="--extra local --extra remote --extra turbovec --extra pyserini --extra treesitter"
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
-uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all
+uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS
 ```
 
 Standalone (outside the plugin, running from the repo root):
@@ -77,18 +87,24 @@ if ! command -v uv >/dev/null 2>&1; then
     echo "uv is required. Install: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
     exit 1
 fi
-uv sync --project engine --extra all
+EXTRAS="--extra local --extra remote --extra turbovec --extra pyserini --extra treesitter"
+uv sync --project engine $EXTRAS
 ```
 
-Core (no extras) must always succeed. If the full `--extra all` sync fails
-it is almost always the `pyserini` extra (needs a Java 21 JDK on `PATH`; all
-extras also need network access). Sync core only to confirm the base engine
+Whichever extras you sync, **pass the exact same `$EXTRAS` on every
+`uv run` in Step 2** — `uv run` re-syncs the environment to the extras
+named on that invocation, so a mismatched run would silently add or
+remove packages (including pypdf) behind your back.
+
+Core (no extras) must always succeed. If the full sync fails it is almost
+always the `pyserini` extra (needs a Java 21 JDK on `PATH`; all extras
+also need network access). Sync core only to confirm the base engine
 works, then re-run the full sync once the prerequisite is in place:
 
 ```bash
 export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}"
-uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine"             # core only
-uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all # retry full install
+uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine"           # core only
+uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS   # retry full install
 ```
 
 Report which extras synced and which failed **verbatim** from `uv`'s own
@@ -104,14 +120,18 @@ once with `index`, then search it (as many times as you like) with `query`:
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+EXTRAS="--extra local --extra remote --extra turbovec --extra pyserini --extra treesitter"
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
-uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all \
+uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS \
   retrieval index --root "$PROJECT_ROOT" --auto
 
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
-uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all \
+uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS \
   retrieval query "your query here" --root "$PROJECT_ROOT" --auto
 ```
+
+(`$EXTRAS` is the same list Step 1 synced — add `--extra pdf` to both
+places only if you deliberately chose pypdf as the extraction tool.)
 
 ### Hyperparameters are YOUR decision (made inline, at index/query time)
 
@@ -191,19 +211,88 @@ missing extra, exit 1 — `query` never silently falls back); pass
 location, chunk count, file count, creation time, and staleness without
 searching.
 
-**PDFs are auto-indexed.** A PDF under the project root is discovered and
-indexed automatically, no flag needed — it's routed through a cached
-sidecar-transcript extraction, and its `source_path` in search hits points
-at `.agentic-retrieval/extracted/<original-relpath>.md` (e.g.
+**PDFs and other media are auto-indexed.** A PDF under the project root is
+discovered and indexed automatically, no flag needed — it's routed through a
+cached sidecar-transcript extraction, and its `source_path` in search hits
+points at `.agentic-retrieval/extracted/<original-relpath>.md` (e.g.
 `docs/paper.pdf` -> `.agentic-retrieval/extracted/docs/paper.pdf.md`) rather
 than the original PDF. `Read()` it exactly like any other hit; line 1 is an
 HTML comment naming the original PDF (`<!-- source: <relpath> -->`), so the
-provenance is still visible. Without the `pdf` extra installed, a PDF still
-indexes as a searchable placeholder stub instead of a real transcript (one
-`warning: pypdf is not installed` line on stderr). Pass `--no-pdf` on
-`index` to opt out entirely; pre-warm a large corpus's PDF sidecars ahead of
-a first `index`/`query` with `retrieval extract` (see
+provenance is still visible. Under the default sync (Step 1 deliberately
+leaves pypdf uninstalled), a PDF first indexes as a searchable placeholder
+stub instead of a real transcript (one `warning: pypdf is not installed`
+line on stderr). **That warning is expected — and it is your cue to act**:
+an `index` run is not finished for media until the stubs are replaced —
+run the "Without the `pdf` extra: author the transcript yourself" workflow
+below immediately after indexing, so the media index is built before any
+query needs it. Pass `--no-pdf` on `index`
+to opt out entirely; pre-warm a large corpus's PDF sidecars ahead of a
+first `index`/`query` with `retrieval extract` (see
 `docs/reference/cli.md`).
+
+The same auto-discovery covers a second tier of media with **no machine
+extractor at all**: `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.jpeg`,
+`.gif`, `.webp`. These always index as an `agent-only` stub — there is no
+`--extra` to install, no bulk-extraction fallback — the sidecar workflow
+below is the *only* way to index their real content. `retrieval sidecar
+--list` reports them the same way as a PDF stub (`state: stub`, `reason:
+agent-only`).
+
+#### Without the `pdf` extra: author the transcript yourself
+
+This is the **default media-indexing path** — for PDFs *and* for
+`.docx`/`.pptx`/`.xlsx`/images, which have no machine-extraction option at
+all: the standard sync (Step 1) deliberately leaves `pypdf` uninstalled and
+delegates extraction to you — the invoking agent — because you can read the
+original file natively and choose the right tool per corpus. Build the
+media index yourself instead of leaving placeholder stubs:
+
+1. **Detect.** Run `retrieval sidecar --list --root "$PROJECT_ROOT" --json`
+   and act on any file whose `state` is `stub`, `missing`, or `outdated` —
+   or notice a search hit whose body is a stub's placeholder text.
+2. **Scope — choose your tool, and what's worth transcribing.**
+   Transcribe only content-bearing media: diagrams, screenshots with
+   meaningful text/structure, real documents. For decorative images (logos,
+   icons) either leave the stub as-is or register a one-line description —
+   don't burn effort transcribing filler. For a handful of PDFs, transcribe
+   them all right after `index` so the media index is complete up front.
+   For a large corpus, author on demand (the files a query actually
+   surfaced, or that you already need to read) — or, for PDFs specifically,
+   decide that bulk machine extraction is the better tool and opt in to
+   pypdf instead: re-run Step 1's sync and Step 2's commands with `--extra
+   pdf` added, then `retrieval extract` pre-warms every PDF sidecar
+   (`extract` never touches `.docx`/`.pptx`/`.xlsx`/images — those always
+   need `sidecar --register`). The choice is yours per corpus.
+3. **Read the file.** Use your own `Read()` tool directly on the original
+   file (most coding-agent `Read` tools render PDF/docx/pptx/xlsx text
+   natively); for an image, use your native vision to describe
+   content-bearing detail — text visible in the image, structure, meaning.
+   Never fabricate detail you cannot actually see.
+4. **Write the transcript** to a scratch file: plain prose describing/
+   transcribing the content. `## Page N` headings are the PDF convention
+   (one per page — it's what produces the page breadcrumb in later
+   search-hit context) but are optional for page-less formats; a single
+   `## Page 1` heading is fine, and omitting headings entirely just
+   degrades the breadcrumb gracefully rather than breaking anything. Use
+   `_[no text layer]_` for an image-only PDF page. Do not add a `<!--
+   source: ... -->` header yourself — `retrieval sidecar --register` adds
+   it for you.
+5. **Register** with `retrieval sidecar --register <file> --transcript
+   <file> --root "$PROJECT_ROOT"`. Register every transcript you've
+   authored before reindexing — the manifest write is last-writer-wins per
+   file, not additive.
+6. **Reindex.** `retrieval index`, or simply run your next `retrieval
+   query` — a registered transcript changes the corpus fingerprint, so a
+   flag-less query auto-reindexes.
+7. **Verify.** `retrieval sidecar --list` should show the file as
+   `agent-authored`; a query for a distinctive phrase from the transcript
+   should hit `.agentic-retrieval/extracted/<rel>.md`.
+8. **Lifecycle.** An agent-authored sidecar persists indefinitely and is
+   **not** silently replaced if the `pdf` extra gets installed later (and
+   never for agent-only media, which has nothing to replace it with) — only
+   an explicit `retrieval extract --force` overwrites a PDF's (with a
+   warning). Re-register (repeat steps 3-5) whenever the source file itself
+   changes.
 
 ### `query`'s default is consolidated (all strategies, one ranked list)
 
@@ -389,7 +478,9 @@ plain-text/JSON output:
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
 RETRIEVAL_ROOT="$PROJECT_ROOT" \
-uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all python - <<'PY'
+uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" \
+  --extra local --extra remote --extra turbovec --extra pyserini --extra treesitter \
+  python - <<'PY'
 import os
 
 from retrieval.project_loader import load_chunk_documents
@@ -407,7 +498,9 @@ Standalone (outside the plugin, running from the repo root):
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-RETRIEVAL_ROOT="$PROJECT_ROOT" uv run --project engine --extra all python - <<'PY'
+RETRIEVAL_ROOT="$PROJECT_ROOT" uv run --project engine \
+  --extra local --extra remote --extra turbovec --extra pyserini --extra treesitter \
+  python - <<'PY'
 import os
 
 from retrieval.project_loader import load_chunk_documents
@@ -467,7 +560,7 @@ print(r.search("what carries data between networks", top_k=5))
 
 - The core `uv sync` (no extras) must succeed — everything downstream
   depends on it.
-- If the full `--extra all` sync fails, sync core only to confirm the base
+- If the full extras sync fails, sync core only to confirm the base
   engine works, then re-run the full sync once the prerequisite (usually a
   Java 21 JDK for `pyserini`, or network access) is in place — see Step 1's
   core-only fallback.
@@ -490,6 +583,13 @@ print(r.search("what carries data between networks", top_k=5))
   backend hard-fails with a guidance `RuntimeError` and exit 1, with no
   silent fallback. If you want graceful behavior at query time, catch the
   failure yourself and retry with `--retriever lexical`.
+- A missing `pdf` extra never hard-fails `index`/`query` — a PDF just
+  indexes as a placeholder stub instead of real text, and agent-only media
+  (`.docx`/`.pptx`/`.xlsx`/images) always does, extra or not, since no
+  machine extractor exists for them. Under the default sync this is the
+  expected first state, not a failure: `retrieval sidecar --register` is
+  the standard media path (see "Without the `pdf` extra: author the
+  transcript yourself" above), no install required.
 
 ## Guardrails
 
@@ -505,6 +605,19 @@ print(r.search("what carries data between networks", top_k=5))
   — always invoke the engine via `uv run --project <path-to-engine>`, never a
   bare `python`/`python3`/`pip install` call, which would bypass that
   isolation and resolve to a different (likely dependency-less) interpreter.
+- **Never fabricate a media transcript**: when authoring a sidecar via
+  `retrieval sidecar --register` (see "Without the `pdf` extra" above),
+  only transcribe content actually present in the file you read/viewed —
+  for an image-only PDF page, write `_[no text layer]_` (or skip that PDF
+  entirely); for a decorative image (logo, icon), either leave the stub or
+  register a one-line description — never invent plausible-sounding
+  content you did not actually see.
+- **Never hand-edit a sidecar `.md` file** under
+  `.agentic-retrieval/extracted/`: its byte size is part of the cache-hit
+  check, so an edit that changes the file's size (without going through
+  `register_sidecar`) silently turns it into a cache miss and it gets
+  overwritten on the next extraction/reindex — always re-register through
+  `retrieval sidecar --register` instead of editing the file directly.
 
 ## Related knowledge skills
 

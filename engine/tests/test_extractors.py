@@ -9,12 +9,16 @@ skipUnless/skipIf in both directions, mirroring
 """
 
 import ast
+import hashlib
 import inspect
+import io
+import json
 import os
 import pathlib
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 
 _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
@@ -195,6 +199,7 @@ class TestMissingPypdfGuidance(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             extractors.require_extractors({".pdf"})
         self.assertIn(".[pdf]", str(ctx.exception))
+        self.assertIn("sidecar --register", str(ctx.exception))
         self.assertIsInstance(ctx.exception.__cause__, ImportError)
 
     def test_require_extractors_no_op_for_non_pdf_extensions(self) -> None:
@@ -216,6 +221,15 @@ class TestMissingPypdfGuidance(unittest.TestCase):
             self.assertGreaterEqual(len(chunks), 1)
             self.assertTrue(any("doc.pdf" in c.text for c in chunks))
 
+    def test_backend_missing_stub_mentions_sidecar_register(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.clear_process_cache()
+            sidecar = extractors.ensure_sidecar(root, pdf_path)
+            self.assertIn("sidecar --register", sidecar.text)
+
 
 class TestManifestCorruption(unittest.TestCase):
     def test_corrupt_manifest_treated_as_empty_no_raise(self) -> None:
@@ -230,6 +244,42 @@ class TestManifestCorruption(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             self.assertFalse(extractors.needs_reextraction(root))
+
+    def test_entry_missing_status_key_is_cache_miss_not_keyerror(self) -> None:
+        # A manifest entry missing "status" (hand-edited/corrupted, or from
+        # a future schema) must fall through _is_cache_hit's membership
+        # check to a cache miss + re-extraction, not raise KeyError from
+        # ensure_sidecar's cache-hit branch (which used to index
+        # entry["status"] unconditionally).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            sha256 = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+            sidecar_rel = extractors.sidecar_relpath("doc.pdf")
+            sidecar_path = root / sidecar_rel
+            sidecar_path.parent.mkdir(parents=True)
+            sidecar_path.write_text("stub content", encoding="utf-8")
+            manifest_dir = extractors.extract_dir(root)
+            (manifest_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "entries": {
+                            "doc.pdf": {
+                                "sha256": sha256,
+                                "extractor_version": extractors.EXTRACTOR_VERSION,
+                                "sidecar": sidecar_rel,
+                                "sidecar_bytes": len("stub content".encode("utf-8")),
+                                # "status" intentionally omitted.
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            extractors.clear_process_cache()
+            sidecar = extractors.ensure_sidecar(root, pdf_path)  # must not raise
+            self.assertIsNotNone(sidecar.status)
 
 
 @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
@@ -566,6 +616,331 @@ class TestTruncateAtPageBoundary(unittest.TestCase):
             extractors.MAX_TRANSCRIPT_CHARS = old_budget
         self.assertTrue(truncated)
         self.assertIn("## Page 1", transcript)
+
+
+class TestAgentAuthoredSidecar(unittest.TestCase):
+    """Coverage for the no-pypdf agent-authored sidecar path
+    (``register_sidecar``) — must pass with or without pypdf installed,
+    since ``register_sidecar`` itself never imports the backend."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    def test_register_sidecar_writes_entry_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            sidecar = extractors.register_sidecar(root, pdf_path, "## Page 1\n\nHello world.")
+            self.assertEqual(sidecar.status, "ok")
+            self.assertTrue(sidecar.path.exists())
+            entry = extractors.load_manifest(root)["entries"]["doc.pdf"]
+            self.assertEqual(entry["extractor_version"], extractors.AGENT_EXTRACTOR_VERSION)
+            self.assertEqual(entry["authored_by"], "agent")
+            self.assertEqual(entry["status"], "ok")
+            self.assertEqual(entry["reason"], "")
+            self.assertIn("authored_at", entry)
+            self.assertIn("sidecar_sha256", entry)
+            self.assertEqual(entry["pages"], 1)
+
+    def test_register_sidecar_header_names_agent_extractor_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            sidecar = extractors.register_sidecar(root, pdf_path, "some transcript text")
+            self.assertIn(f"extractor: {extractors.AGENT_EXTRACTOR_VERSION}", sidecar.text)
+
+    def test_register_sidecar_preserves_page_headings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            transcript = "## Page 1\n\nfirst.\n\n## Page 2\n\nsecond."
+            sidecar = extractors.register_sidecar(root, pdf_path, transcript)
+            self.assertIn("## Page 1", sidecar.text)
+            self.assertIn("## Page 2", sidecar.text)
+            entry = extractors.load_manifest(root)["entries"]["doc.pdf"]
+            self.assertEqual(entry["pages"], 2)
+
+    def test_registered_sidecar_is_cache_hit_without_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            extractors.clear_process_cache()
+            original = extractors.backend_available
+            extractors.backend_available = lambda: False
+            try:
+                sidecar = extractors.ensure_sidecar(root, pdf_path)
+            finally:
+                extractors.backend_available = original
+            self.assertTrue(sidecar.cache_hit)
+            self.assertEqual(sidecar.status, "ok")
+
+    def test_registered_sidecar_is_cache_hit_with_backend_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            extractors.clear_process_cache()
+            original = extractors.backend_available
+            extractors.backend_available = lambda: True
+            try:
+                sidecar = extractors.ensure_sidecar(root, pdf_path)
+            finally:
+                extractors.backend_available = original
+            self.assertTrue(sidecar.cache_hit)
+            self.assertEqual(sidecar.status, "ok")
+
+    def test_ensure_sidecar_does_not_overwrite_agent_sidecar_with_stub(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            extractors.clear_process_cache()
+            original = extractors.backend_available
+            extractors.backend_available = lambda: False
+            try:
+                sidecar = extractors.ensure_sidecar(root, pdf_path)
+            finally:
+                extractors.backend_available = original
+            self.assertNotEqual(sidecar.reason, "backend-missing")
+            self.assertIn("hand-authored transcript", sidecar.text)
+
+    def test_register_sidecar_rejects_empty_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            with self.assertRaises(ValueError):
+                extractors.register_sidecar(root, pdf_path, "   \n  ")
+
+    def test_register_sidecar_rejects_non_extractable_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            txt_path = root / "doc.txt"
+            txt_path.write_text("hello", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                extractors.register_sidecar(root, txt_path, "transcript")
+
+    def test_register_sidecar_rejects_source_outside_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2:
+            root = pathlib.Path(tmp1)
+            outside = pathlib.Path(tmp2) / "doc.pdf"
+            outside.write_bytes(b"%PDF-1.4\nnot a real body")
+            with self.assertRaises(ValueError):
+                extractors.register_sidecar(root, outside, "transcript")
+
+    def test_register_sidecar_strips_leading_header_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            transcript = "<!-- source: doc.pdf -->\n<!-- extractor: x -->\nActual content."
+            sidecar = extractors.register_sidecar(root, pdf_path, transcript)
+            self.assertEqual(sidecar.text.count("<!-- source:"), 1)
+            self.assertIn("Actual content.", sidecar.text)
+
+    def test_register_sidecar_truncates_oversized_transcript_at_page_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            transcript = "\n\n".join(
+                f"## Page {i}\n\n" + ("word " * 50) for i in range(1, 6)
+            )
+            old_budget = extractors.MAX_TRANSCRIPT_CHARS
+            extractors.MAX_TRANSCRIPT_CHARS = 400
+            try:
+                sidecar = extractors.register_sidecar(root, pdf_path, transcript)
+            finally:
+                extractors.MAX_TRANSCRIPT_CHARS = old_budget
+            self.assertIn("truncated", sidecar.text)
+            entry = extractors.load_manifest(root)["entries"]["doc.pdf"]
+            self.assertTrue(entry["truncated"])
+            self.assertTrue(sidecar.text.count("## Page") < 5)
+
+    def test_register_sidecar_invalidates_process_memo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            original = extractors.backend_available
+            extractors.backend_available = lambda: False
+            try:
+                stub = extractors.ensure_sidecar(root, pdf_path)
+                self.assertEqual(stub.reason, "backend-missing")
+                extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+                # No clear_process_cache() call here: register_sidecar must
+                # invalidate the memo itself, else this call would keep
+                # serving the stale stub keyed by the source's unchanged
+                # (size, mtime) rather than the freshly registered sidecar.
+                sidecar = extractors.ensure_sidecar(root, pdf_path)
+            finally:
+                extractors.backend_available = original
+            self.assertEqual(sidecar.status, "ok")
+            self.assertIn("hand-authored transcript", sidecar.text)
+
+    def test_source_change_invalidates_agent_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nfirst body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            pdf_path.write_bytes(b"%PDF-1.4\nsecond, different body content here")
+            extractors.clear_process_cache()
+            original = extractors.backend_available
+            extractors.backend_available = lambda: False
+            try:
+                sidecar = extractors.ensure_sidecar(root, pdf_path)
+            finally:
+                extractors.backend_available = original
+            self.assertFalse(sidecar.cache_hit)
+            self.assertEqual(sidecar.reason, "backend-missing")
+
+    def test_needs_reextraction_false_for_agent_authored_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            original = extractors.backend_available
+            extractors.backend_available = lambda: True
+            try:
+                self.assertFalse(extractors.needs_reextraction(root))
+            finally:
+                extractors.backend_available = original
+
+    def test_agent_sidecar_revision_empty_for_pypdf_entry(self) -> None:
+        pypdf_entry = {"authored_by": "not-an-agent", "sidecar_sha256": "deadbeef"}
+        self.assertEqual(extractors.agent_sidecar_revision(pypdf_entry), "")
+        self.assertEqual(extractors.agent_sidecar_revision({}), "")
+
+
+class TestAgentOnlyMedia(unittest.TestCase):
+    """Media suffixes with no machine extractor at all (docx/pptx/xlsx and
+    images) — ``ensure_sidecar`` always writes an ``"agent-only"`` stub for
+    these, regardless of ``backend_available()``, and that stub must never
+    be mistaken for a ``backend-missing`` one (which self-heals once pypdf
+    is installed; an agent-only stub never should)."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+        extractors._WARNED_AGENT_ONLY = False
+
+    def tearDown(self) -> None:
+        extractors.clear_process_cache()
+        extractors._WARNED_AGENT_ONLY = False
+
+    def test_extension_sets_are_consistent(self) -> None:
+        expected_agent_only = {
+            ".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+        }
+        self.assertEqual(extractors.AGENT_ONLY_EXTENSIONS, frozenset(expected_agent_only))
+        self.assertEqual(extractors.MACHINE_EXTRACTABLE_EXTENSIONS, frozenset({".pdf"}))
+        self.assertEqual(
+            extractors.EXTRACTABLE_EXTENSIONS,
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS | extractors.AGENT_ONLY_EXTENSIONS,
+        )
+        self.assertTrue(expected_agent_only.issubset(extractors.EXTRACTABLE_EXTENSIONS))
+
+    def _stub_for(self, suffix: str, *, backend_flag: bool) -> "extractors.Sidecar":
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            media_path = root / f"file{suffix}"
+            media_path.write_bytes(b"not a real payload, just bytes")
+            extractors.clear_process_cache()
+            original = extractors.backend_available
+            extractors.backend_available = lambda: backend_flag
+            try:
+                return extractors.ensure_sidecar(root, media_path)
+            finally:
+                extractors.backend_available = original
+
+    def test_docx_stub_reason_and_message_backend_unavailable(self) -> None:
+        sidecar = self._stub_for(".docx", backend_flag=False)
+        self.assertEqual(sidecar.status, "stub")
+        self.assertEqual(sidecar.reason, "agent-only")
+        self.assertIn("sidecar --register", sidecar.text)
+
+    def test_png_stub_reason_and_message_backend_available(self) -> None:
+        # Even with a pypdf backend installed/available, agent-only suffixes
+        # never get routed through a pypdf-oriented extractor.
+        sidecar = self._stub_for(".png", backend_flag=True)
+        self.assertEqual(sidecar.status, "stub")
+        self.assertEqual(sidecar.reason, "agent-only")
+        self.assertIn("sidecar --register", sidecar.text)
+
+    def test_agent_only_reason_is_never_backend_missing(self) -> None:
+        sidecar = self._stub_for(".docx", backend_flag=False)
+        self.assertNotEqual(sidecar.reason, "backend-missing")
+
+    def test_one_time_stderr_note_fires_once_per_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            a = root / "a.png"
+            b = root / "b.png"
+            a.write_bytes(b"aaa")
+            b.write_bytes(b"bbb")
+            extractors.clear_process_cache()
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                extractors.ensure_sidecar(root, a)
+                extractors.ensure_sidecar(root, b)
+            err = buf.getvalue()
+            self.assertEqual(err.count("agent-transcribable stubs"), 1)
+
+    def test_needs_reextraction_stays_false_for_agent_only_stub_with_backend_available(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            media_path = root / "diagram.png"
+            media_path.write_bytes(b"not a real payload")
+            extractors.clear_process_cache()
+            original = extractors.backend_available
+            extractors.backend_available = lambda: False
+            try:
+                extractors.ensure_sidecar(root, media_path)
+            finally:
+                extractors.backend_available = original
+            # Now flip the backend "on" and confirm the agent-only stub is
+            # never treated as a stale backend-missing PDF stub that a
+            # newly available pypdf should self-heal.
+            original = extractors.backend_available
+            extractors.backend_available = lambda: True
+            try:
+                self.assertFalse(extractors.needs_reextraction(root))
+            finally:
+                extractors.backend_available = original
+
+    def test_register_sidecar_accepts_docx_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            docx_path = root / "report.docx"
+            docx_path.write_bytes(b"not a real docx payload")
+            sidecar = extractors.register_sidecar(root, docx_path, "Hand-authored docx text.")
+            self.assertEqual(sidecar.status, "ok")
+            self.assertIn("Hand-authored docx text.", sidecar.text)
+
+    def test_register_sidecar_accepts_png_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            png_path = root / "diagram.png"
+            png_path.write_bytes(b"not a real png payload")
+            sidecar = extractors.register_sidecar(
+                root, png_path, "A diagram showing three connected boxes."
+            )
+            self.assertEqual(sidecar.status, "ok")
+            self.assertIn("three connected boxes", sidecar.text)
+
+    def test_require_extractors_no_op_for_agent_only_only_extension_set(self) -> None:
+        # None of these need a backend: there isn't one for any of them.
+        extractors.require_extractors(extractors.AGENT_ONLY_EXTENSIONS)  # must not raise
 
 
 if __name__ == "__main__":

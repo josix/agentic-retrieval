@@ -15,7 +15,11 @@ retriever needs no optional extras; ``lexical+ctx`` needs whatever the
 contextualizer needs, ``turbovec``/``hybrid`` need the turbovec + local
 extras, ``pi-serini`` needs the pyserini extra plus Java 21, and
 ``treesitter`` needs the treesitter extra (each raises a guidance
-RuntimeError when its extras are missing).
+RuntimeError when its extras are missing). ``extract`` pre-warms PDF
+sidecar transcripts via ``pypdf`` (the only subcommand that hard-fails on
+a missing ``pdf`` extra); ``sidecar`` inspects sidecar state (``--list``)
+or registers an agent-authored transcript (``--register``) without ever
+needing ``pypdf`` on either mode — the no-install recovery path.
 """
 
 import argparse
@@ -53,12 +57,7 @@ from retrieval.project_loader import (
     load_ast_chunk_documents,
     load_chunk_documents,
 )
-from retrieval.retrievers import (
-    PiSeriniRetriever,
-    Retriever,
-    build_retriever,
-    resolve_ctor_kwargs,
-)
+from retrieval.retrievers import PiSeriniRetriever, Retriever, build_retriever, resolve_ctor_kwargs
 
 _RETRIEVER_CHOICES = (
     "lexical", "lexical+ctx", "turbovec", "pi-serini", "hybrid", "treesitter",
@@ -135,8 +134,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     index_parser.add_argument(
         "--no-pdf", action="store_true",
-        help="exclude PDFs from discovery (escape hatch for the default "
-        "auto-activated PDF sidecar-extraction pipeline); sticky across "
+        help="exclude PDFs and all other sidecar-routed media (docx/pptx/"
+        "xlsx/images) from discovery (escape hatch for the default "
+        "auto-activated sidecar-extraction pipeline); sticky across "
         "later flag-less 'index'/'query' calls via the persisted meta",
     )
 
@@ -259,6 +259,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="emit a JSON summary instead of one line per file"
     )
 
+    sidecar_parser = subparsers.add_parser(
+        "sidecar",
+        help="inspect or author PDF/media sidecar transcripts without "
+        "pypdf (no-install alternative to 'extract' for PDFs; the only "
+        "indexing path for docx/pptx/xlsx/images; never imports pypdf)",
+    )
+    sidecar_parser.add_argument(
+        "--root", help="project root (default: RETRIEVAL_ROOT or cwd)"
+    )
+    sidecar_parser.add_argument(
+        "--json", action="store_true", help="emit JSON instead of text"
+    )
+    sidecar_mode = sidecar_parser.add_mutually_exclusive_group(required=True)
+    sidecar_mode.add_argument(
+        "--list", action="store_true",
+        help="report every discovered PDF/media file's sidecar state "
+        "(missing/outdated/agent-authored/stub/ok)",
+    )
+    sidecar_mode.add_argument(
+        "--register", metavar="SOURCE",
+        help="register an agent-authored transcript as SOURCE's sidecar "
+        "(requires --transcript)",
+    )
+    sidecar_parser.add_argument(
+        "--transcript",
+        help="path to the transcript file to register, or '-' for stdin "
+        "(required with --register)",
+    )
+
     return parser
 
 
@@ -279,6 +308,7 @@ def _loader_kw_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
     ``{}`` unless ``--no-pdf`` was given (``args`` lacks ``no_pdf`` entirely
     on subparsers other than ``index``, e.g. ``eval``), in which case PDFs
+    *and every other sidecar-routed media suffix* (docx/pptx/xlsx/images)
     are excluded from discovery for this run. Persisted verbatim into meta
     via ``save_index``'s ``loader_kw`` and rehydrated by
     ``persistence.loader_kw_from_meta`` on every later flag-less
@@ -850,12 +880,28 @@ def _cmd_tune(args: argparse.Namespace) -> int:
     return 0
 
 
-def _discover_pdfs(root: Path) -> List[Path]:
-    """PDFs (or any other ``extractors.EXTRACTABLE_EXTENSIONS`` suffix) under
-    *root*, via the default ``discover_files`` eligibility rules."""
+def _discover_media(root: Path) -> List[Path]:
+    """Every sidecar-routed file (PDF + ``extractors.AGENT_ONLY_EXTENSIONS``
+    media) under *root*, via the default ``discover_files`` eligibility
+    rules. Used wherever "every sidecar-eligible file" is the question:
+    ``sidecar --list``/``--register``'s discoverability check, and
+    ``_cmd_extract``'s prune keep-set (pruning must not delete a registered
+    agent-only sidecar just because ``extract`` itself never touches it)."""
     return [
         path for path in discover_files(root)
         if path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS
+    ]
+
+
+def _discover_pdfs(root: Path) -> List[Path]:
+    """PDFs under *root* with a registered machine extractor, via the
+    default ``discover_files`` eligibility rules. Used by ``_cmd_extract``'s
+    extraction loop: ``extract`` stays machine/pypdf-only and must never
+    attempt agent-only media (docx/pptx/xlsx/images), which have no
+    extractor to run."""
+    return [
+        path for path in discover_files(root)
+        if path.suffix.lower() in extractors.MACHINE_EXTRACTABLE_EXTENSIONS
     ]
 
 
@@ -907,6 +953,22 @@ def _print_extract_report(
         print(f"pruned {pruned} orphaned sidecar(s)")
 
 
+def _warn_overwriting_agent_sidecars(root: Path) -> None:
+    """``extract --force`` warning: agent-authored sidecars are never
+    auto-superseded by a later pypdf install (see the module docstring's
+    supersede policy) — ``--force`` is the one deliberate escape hatch, so
+    it warns before silently discarding hand-authored transcripts."""
+    entries = extractors.load_manifest(root).get("entries", {})
+    n_agent = sum(
+        1 for entry in entries.values() if entry.get("authored_by") == extractors.AUTHORED_BY_AGENT
+    )
+    if n_agent:
+        print(
+            f"warning: overwriting {n_agent} agent-authored sidecar(s) with pypdf output",
+            file=sys.stderr,
+        )
+
+
 def _cmd_extract(args: argparse.Namespace) -> int:
     """Pre-warm every PDF's sidecar transcript under *args.root*; never
     builds/touches a retriever index. Hard-fails (guidance ``RuntimeError``,
@@ -915,6 +977,8 @@ def _cmd_extract(args: argparse.Namespace) -> int:
     """
     root = _resolve_root(args.root)
     extractors.require_extractors(extractors.EXTRACTABLE_EXTENSIONS)
+    if args.force:
+        _warn_overwriting_agent_sidecars(root)
     pdf_paths = _discover_pdfs(root)
     sidecars = {
         pdf_path.relative_to(root).as_posix(): extractors.ensure_sidecar(
@@ -927,9 +991,110 @@ def _cmd_extract(args: argparse.Namespace) -> int:
         _extract_file_report(rel, sidecar, manifest_entries.get(rel, {}))
         for rel, sidecar in sidecars.items()
     ]
-    pruned = _prune_orphan_sidecars(root, set(sidecars)) if args.prune else 0
+    # Keep-set is every discovered sidecar-eligible file, not just the PDFs
+    # this loop extracted: agent-only media (docx/pptx/xlsx/images) never
+    # goes through ensure_sidecar here, but a registered agent sidecar for
+    # one must survive --prune just like a PDF's would.
+    keep_rel = {path.relative_to(root).as_posix() for path in _discover_media(root)}
+    pruned = _prune_orphan_sidecars(root, keep_rel) if args.prune else 0
     _print_extract_report(file_reports, pruned, args.json, root)
     return 0
+
+
+def _sidecar_state_line(state: Dict[str, Any]) -> str:
+    """One ``retrieval sidecar --list`` text-mode line for *state* (an entry
+    from ``extractors.sidecar_states``)."""
+    label = state["state"]
+    if label == "missing":
+        return f"{state['rel']}: missing -> needs transcript"
+    if label == "outdated":
+        return f"{state['rel']}: outdated -> source changed, needs re-extraction"
+    if label == "stub":
+        return f"{state['rel']}: stub ({state['reason']}) -> needs transcript"
+    if label == "agent-authored":
+        return f"{state['rel']}: agent-authored ({state['pages']} pages)"
+    return f"{state['rel']}: ok ({state['pages']} pages)"
+
+
+def _cmd_sidecar_list(args: argparse.Namespace, root: Path) -> int:
+    """``retrieval sidecar --list``: report every discovered PDF/media
+    file's sidecar state, without importing/needing pypdf."""
+    media_paths = _discover_media(root)
+    states = extractors.sidecar_states(root, media_paths)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "root": str(root),
+                    "backend_available": extractors.backend_available(),
+                    "files": states,
+                }
+            )
+        )
+        return 0
+    for state in states:
+        print(_sidecar_state_line(state))
+    return 0
+
+
+def _read_transcript(transcript_arg: str) -> str:
+    """Read a transcript from a file path, or stdin when *transcript_arg*
+    is ``-`` (the CLI-conventional stdin marker)."""
+    if transcript_arg == "-":
+        return sys.stdin.read()
+    return Path(transcript_arg).read_text(encoding="utf-8")
+
+
+def _cmd_sidecar_register(args: argparse.Namespace, root: Path) -> int:
+    """``retrieval sidecar --register SOURCE --transcript PATH|-``: the
+    no-pypdf recovery path — an agent hand-authors the transcript and
+    registers it directly, no backend install required.
+
+    ``args.transcript`` is guaranteed non-``None`` here: ``main`` enforces
+    the --register/--transcript pairing (an argparse-style ``parser.error``,
+    exit 2) before dispatching to this function.
+    """
+    transcript = _read_transcript(args.transcript)
+    source_path = Path(args.register)
+    if not source_path.is_absolute():
+        source_path = root / source_path
+    sidecar = extractors.register_sidecar(root, source_path, transcript)
+
+    discoverable = source_path.resolve() in {p.resolve() for p in _discover_media(root)}
+    if not discoverable:
+        print(
+            f"note: {source_path} is registered but not discoverable by the "
+            "default project loader (excluded dir, extension, or size cap) "
+            "- it will not be indexed",
+            file=sys.stderr,
+        )
+
+    manifest_entries = extractors.load_manifest(root).get("entries", {})
+    rel = source_path.resolve().relative_to(root.resolve()).as_posix()
+    pages = manifest_entries.get(rel, {}).get("pages", 0)
+    if pages == 0:
+        print(
+            "note: no '## Page N' headings found in the transcript - page "
+            "breadcrumbs will be absent from search-hit context",
+            file=sys.stderr,
+        )
+
+    if args.json:
+        print(json.dumps({"source": rel, "sidecar": sidecar.docid, "pages": pages}))
+    else:
+        print(f"{rel} -> {sidecar.docid} ({pages} pages)")
+        print("reindex to pick up this sidecar: `retrieval index` (or just query)")
+    return 0
+
+
+def _cmd_sidecar(args: argparse.Namespace) -> int:
+    """``retrieval sidecar``: inspect (``--list``) or author
+    (``--register``) PDF sidecar transcripts, never importing/requiring
+    pypdf on either path (unlike ``extract``)."""
+    root = _resolve_root(args.root)
+    if args.list:
+        return _cmd_sidecar_list(args, root)
+    return _cmd_sidecar_register(args, root)
 
 
 _COMMANDS = {
@@ -939,6 +1104,7 @@ _COMMANDS = {
     "eval": _cmd_eval,
     "tune": _cmd_tune,
     "extract": _cmd_extract,
+    "sidecar": _cmd_sidecar,
 }
 
 
@@ -951,6 +1117,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     """
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "sidecar" and args.register and not args.transcript:
+        parser.error("sidecar --register requires --transcript PATH|-")
     try:
         return _COMMANDS[args.command](args)
     except Exception as exc:  # noqa: BLE001 - CLI top-level error boundary

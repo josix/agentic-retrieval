@@ -9,10 +9,15 @@ Thin dispatcher — invoke the `retrieval` skill and follow its steps exactly.
 
 ## Subcommands
 
-- `setup [all|core|<extra>...]` — `uv sync` the offline engine plus every
-  optional per-strategy extra in one pass. `core` is not an installable
-  extra — it means the base, no-extras sync (`uv sync` with no `--extra`),
-  which is also the fallback tried first if the full sync fails
+- `setup [all|core|<extra>...]` — `uv sync` the offline engine plus the
+  per-strategy extras in one pass. The default sync is every strategy
+  extra EXCEPT `pdf` (media extraction is delegated to the invoking
+  agent, which authors PDF transcripts itself via `retrieval sidecar
+  --register` — see `skills/retrieval/SKILL.md` Step 1); pass `pdf` (or
+  `all`) explicitly to opt in to pypdf machine extraction instead.
+  `core` is not an installable extra — it means the base, no-extras sync
+  (`uv sync` with no `--extra`), which is also the fallback tried first
+  if the full sync fails
 - `index` — build and persist an on-disk index for the invoking project
   (`retrieval index --root "$PROJECT_ROOT" --auto`); defaults to building ALL
   strategy caches (lexical always succeeds; turbovec/pi-serini/hybrid/
@@ -55,6 +60,14 @@ Thin dispatcher — invoke the `retrieval` skill and follow its steps exactly.
 
 See `hybrid-retrieval-usage` for the full decision walkthrough.
 
+Without the `pdf` extra, don't leave PDF and other media (docx/pptx/xlsx/
+images) as placeholder stubs — author their transcripts yourself and
+register with `retrieval sidecar --register`; see
+`skills/retrieval/SKILL.md`'s "Without the `pdf` extra: author the
+transcript yourself" section for the full workflow. Non-PDF media has no
+machine-extraction option at all — `sidecar --register` is the only way
+to index it, `pdf` extra or not.
+
 After setup, the skill searches the invoking project's own files with the
 zero-dependency `LexicalRetriever`, via the `retrieval` console-script CLI
 (see `skills/retrieval/SKILL.md` Step 2). For LLM or heuristic
@@ -66,8 +79,11 @@ phased deep-answer workflow (Q → R → T → C → S, Step 3 of
 `skills/retrieval/SKILL.md`) rather than stopping at the first hit — this
 command remains a thin dispatcher into that skill.
 
-`setup` runs `uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all`
-(see `skills/retrieval/SKILL.md` Step 1).
+`setup` runs `uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra
+local --extra remote --extra turbovec --extra pyserini --extra treesitter`
+— deliberately without `--extra pdf`, so media extraction stays delegated
+to the agent (see `skills/retrieval/SKILL.md` Step 1; add `pdf` to opt in
+to pypdf).
 
 For per-method usage (setup, indexing/search snippets, graceful degradation,
 and combining methods), see the sibling knowledge skills:

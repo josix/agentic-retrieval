@@ -121,7 +121,9 @@ warning below now applies only to overrides.
 
 ## PDF sidecars + extraction manifest live under the project root
 
-`retrieval.extractors` writes PDF sidecar transcripts and their manifest
+`retrieval.extractors` writes sidecar transcripts and their manifest for
+every `extractors.EXTRACTABLE_EXTENSIONS` file (PDFs, plus agent-only media
+— `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`)
 under `<project-root>/.agentic-retrieval/extracted/` — deliberately
 **always** under the indexed root, even when `RETRIEVAL_INDEX_DIR` redirects
 the retriever caches described above to a shared external directory. A
@@ -138,6 +140,28 @@ upgrade both force re-extraction; an unchanged file across repeated calls
 (e.g. `index --auto`'s multiple loader passes in one run) is a cache hit.
 See [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)
 and the [`extractors` API reference](api/extractors.md).
+
+### Agent-authored manifest entries
+
+A sidecar registered via `retrieval sidecar --register` (see
+[CLI reference](cli.md#sidecar)) writes `extractor_version:
+"agent-authored/1"` instead of `pypdf-text/1`, plus three extra keys not
+present on a pypdf-written entry: `authored_by` (`"agent"`), `authored_at`
+(ISO-8601 UTC timestamp), and `sidecar_sha256` (the SHA-256 of the written
+sidecar file's own bytes). Both extractor-version strings are accepted as
+"fresh" by the cache-hit check, so an agent-authored entry is a durable,
+first-class sidecar — not a stub awaiting a real extraction — and is never
+silently superseded by a later `pypdf` install; only an explicit `retrieval
+extract --force` overwrites it (with a `warning: overwriting N
+agent-authored sidecar(s)` line on stderr).
+
+`compute_fingerprint` mixes `sidecar_sha256` into a discovered PDF's
+fingerprint line (`"relpath|size|mtime|sidecar_sha256"` instead of the
+usual `"relpath|size|mtime"`) whenever that PDF's manifest entry is
+agent-authored — so re-registering a changed transcript over an
+otherwise-unchanged source PDF (same size/mtime) still flips the
+fingerprint and triggers a reindex. A corpus with no agent-authored entries
+fingerprints byte-identically to the pre-0.9.0 format.
 
 ## Schema versioning
 

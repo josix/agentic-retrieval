@@ -1,4 +1,5 @@
-"""Sidecar-transcript extraction for non-text-native document formats (PDF).
+"""Sidecar-transcript extraction for non-text-native document formats (PDF +
+agent-only media).
 
 Stdlib-only at import scope (``dataclasses``, ``hashlib``, ``io``, ``json``,
 ``os``, ``re``, ``struct``, ``sys``, ``time``, ``statistics``,
@@ -28,6 +29,22 @@ per run. Every failure mode (encrypted, malformed, empty, no-text-layer,
 backend-missing) still produces a non-empty, human-readable sidecar — the
 chunker returns zero chunks for blank input, so an empty stub would silently
 vanish from every index.
+
+No-install alternative: when ``pypdf`` isn't installed (or installing it
+isn't an option), ``register_sidecar`` lets a coding agent that read the
+PDF itself hand-author the transcript and register it directly — never
+importing ``pypdf`` on that path either. An agent-authored entry is a
+durable, first-class sidecar (``AGENT_EXTRACTOR_VERSION``), never silently
+superseded by a later ``pypdf`` install; only an explicit ``retrieval
+extract --force`` overwrites it. See ``retrieval sidecar --list
+--register`` (``retrieval.cli``) and the ``retrieval`` skill's "Without the
+pdf extra" section.
+
+Beyond PDF, a second tier of media (``AGENT_ONLY_EXTENSIONS`` — office docs
+and images) has **no machine extractor at all**: ``ensure_sidecar`` always
+writes an ``"agent-only"`` stub for these suffixes, regardless of what's
+installed, and the ``retrieval sidecar --register`` workflow above is the
+*only* way to index their real content.
 """
 
 import hashlib
@@ -49,8 +66,48 @@ from typing import Any, Callable, Dict, Iterable, List, Tuple
 #: forcing full re-extraction — the manifest equivalent of a schema bump.
 EXTRACTOR_VERSION = "pypdf-text/1"
 
-#: File suffixes this module can produce a sidecar for.
-EXTRACTABLE_EXTENSIONS = frozenset({".pdf"})
+#: Extractor-version string stamped on manifest entries written by
+#: ``register_sidecar`` (an agent-authored transcript, not a pypdf-parsed
+#: one). Distinct from ``EXTRACTOR_VERSION`` so the two provenances never
+#: collide in the manifest, but both are accepted by ``_is_cache_hit`` (see
+#: ``_ACCEPTED_EXTRACTOR_VERSIONS``) — an agent transcript is a durable,
+#: first-class sidecar, not a stub awaiting a real extraction.
+AGENT_EXTRACTOR_VERSION = "agent-authored/1"
+
+#: Extractor-version values ``_is_cache_hit`` treats as fresh; membership
+#: (not equality with ``EXTRACTOR_VERSION``) so an agent-authored entry
+#: survives across ``ensure_sidecar`` calls instead of being treated as
+#: stale pypdf output.
+_ACCEPTED_EXTRACTOR_VERSIONS = frozenset({EXTRACTOR_VERSION, AGENT_EXTRACTOR_VERSION})
+
+#: ``manifest["entries"][rel]["authored_by"]`` value for an agent-registered
+#: sidecar (see ``register_sidecar``).
+AUTHORED_BY_AGENT = "agent"
+
+#: Suffixes with a registered machine extractor (currently: pypdf for
+#: ``.pdf``). Used where "can a machine attempt real extraction" is the
+#: question (``require_extractors`` preflight, ``cli._discover_pdfs`` /
+#: ``_cmd_extract``'s extraction loop) — never for discovery eligibility,
+#: which is ``EXTRACTABLE_EXTENSIONS`` (below).
+MACHINE_EXTRACTABLE_EXTENSIONS = frozenset({".pdf"})
+
+#: Suffixes with **no** machine extractor at all: office documents and
+#: images a coding agent can read/view natively (Read tool / vision) but
+#: this module can never parse itself. ``ensure_sidecar`` always writes an
+#: ``"agent-only"`` stub for these — the sidecar-register workflow is the
+#: only indexing path. Audio/video are deliberately excluded: agents can't
+#: yet reliably transcribe them natively (see the changelog's future-work
+#: note).
+AGENT_ONLY_EXTENSIONS = frozenset(
+    {".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+)
+
+#: File suffixes this module can produce a sidecar for (PDF + agent-only
+#: media) — either via a machine extractor or via ``register_sidecar``.
+#: ``project_loader`` discovery, ``register_sidecar``'s suffix validation,
+#: and ``persistence.compute_fingerprint`` all key off this union, so a new
+#: agent-only suffix added here is discovered/fingerprinted for free.
+EXTRACTABLE_EXTENSIONS = MACHINE_EXTRACTABLE_EXTENSIONS | AGENT_ONLY_EXTENSIONS
 
 #: Raw source-file byte cap applied at discovery time for extractable
 #: suffixes (see ``project_loader.discover_files``'s ``extract_max_bytes``).
@@ -73,6 +130,17 @@ _PAGE_MEMORY_GUARD_BYTES = 50_000_000
 
 _DEHYPHEN_RE = re.compile(r"(\w)-\n(\w)")
 _WS_COLLAPSE_RE = re.compile(r"[ \t]{2,}")
+
+#: Matches a ``## Page N`` heading line, used both to count pages in an
+#: agent-authored transcript and to find whole-page boundaries for
+#: ``register_sidecar``'s oversized-transcript truncation.
+_PAGE_HEADING_RE = re.compile(r"^## Page \d+\s*$", re.MULTILINE)
+
+#: Strips a leading run of ``<!-- ... -->`` comment lines from an
+#: agent-authored transcript before rendering — ``_render_sidecar`` always
+#: writes its own header, so a re-registered transcript that (redundantly)
+#: includes one from a prior read must not end up with two.
+_LEADING_COMMENT_RE = re.compile(r"\A(?:<!--[^\n]*-->\n)+")
 
 
 @dataclass(frozen=True)
@@ -110,6 +178,11 @@ _PROCESS_MEMO: Dict[Tuple[str, int, int], Sidecar] = {}
 #: "install the pdf extra" warning prints at most once per process.
 _WARNED = False
 
+#: Set once an agent-only-media file has been stubbed, so the
+#: "register a transcript" note prints at most once per process (mirrors
+#: ``_WARNED``).
+_WARNED_AGENT_ONLY = False
+
 _MSG_ENCRYPTED = (
     "This PDF is password-protected and could not be decrypted with an "
     "empty password, so no text could be extracted."
@@ -130,7 +203,16 @@ _MSG_MALFORMED = (
 _MSG_BACKEND_MISSING = (
     "pypdf is not installed, so this PDF's text could not be extracted. "
     "Install the 'pdf' extra (`uv pip install -e '.[pdf]'`) and reindex to "
-    "extract real content."
+    "extract real content. Alternatively, an agent can read this PDF itself "
+    "and author the transcript directly via `retrieval sidecar --register "
+    "<pdf> --transcript <file>` — no pypdf install required."
+)
+_MSG_AGENT_ONLY = (
+    "This file's format has no machine extractor; no text has been "
+    "extracted automatically. A coding agent can read the original file "
+    "natively (Read tool for documents, vision for images) and register a "
+    "transcript directly via `retrieval sidecar --register <file> "
+    "--transcript <transcript> --root <root>`."
 )
 
 
@@ -149,18 +231,23 @@ def require_extractors(extensions: Iterable[str]) -> None:
     isn't installed (mirrors ``retrieval.retrievers``' guidance-``RuntimeError``
     convention: ``RuntimeError``, not ``ImportError``, two-line message).
 
-    Only checks extension membership in ``EXTRACTABLE_EXTENSIONS`` — never
-    probes import success for eligibility/discovery, only for this explicit
-    preflight call.
+    Only checks extension membership in ``MACHINE_EXTRACTABLE_EXTENSIONS``
+    (currently ``.pdf``) — never probes import success for
+    eligibility/discovery, only for this explicit preflight call.
+    ``AGENT_ONLY_EXTENSIONS`` never needs a backend (there isn't one), so
+    they're excluded from this guard.
     """
-    if not any(ext.lower() in EXTRACTABLE_EXTENSIONS for ext in extensions):
+    if not any(ext.lower() in MACHINE_EXTRACTABLE_EXTENSIONS for ext in extensions):
         return
     try:
         import pypdf  # noqa: F401
     except ImportError as exc:  # pragma: no cover - guidance path
         raise RuntimeError(
             "PDF extraction needs the 'pdf' extra:\n"
-            "  uv pip install -e '.[pdf]'"
+            "  uv pip install -e '.[pdf]'\n"
+            "No-install alternative: an agent can author the transcript "
+            "itself and register it with `retrieval sidecar --register "
+            "<pdf> --transcript <file>`."
         ) from exc
 
 
@@ -182,6 +269,22 @@ def backend_available() -> bool:
 def clear_process_cache() -> None:
     """Clear the process-level ``ensure_sidecar`` memo (test hook)."""
     _PROCESS_MEMO.clear()
+
+
+def invalidate_process_cache(source: "os.PathLike[str] | str") -> None:
+    """Drop every ``_PROCESS_MEMO`` entry for *source*, regardless of the
+    ``(size, mtime_ns)`` it was memoized under.
+
+    ``register_sidecar`` calls this after writing a new manifest entry: the
+    process memo is keyed by ``(abs_path, st_size, st_mtime_ns)`` of the
+    *source* PDF, which registration doesn't touch, so a stale ``stub``
+    result from an earlier ``ensure_sidecar`` call in this same process
+    would otherwise keep being served instead of the freshly registered
+    transcript.
+    """
+    resolved = str(Path(source).resolve())
+    for key in [k for k in _PROCESS_MEMO if k[0] == resolved]:
+        del _PROCESS_MEMO[key]
 
 
 def extract_dir(root: "os.PathLike[str] | str") -> Path:
@@ -258,17 +361,33 @@ def _warn_backend_missing() -> None:
         _WARNED = True
 
 
+def _warn_agent_only() -> None:
+    global _WARNED_AGENT_ONLY
+    if not _WARNED_AGENT_ONLY:
+        print(
+            "warning: media files were indexed as agent-transcribable stubs "
+            "(no machine extractor exists for their format) - register "
+            "transcripts via `retrieval sidecar --register`",
+            file=sys.stderr,
+        )
+        _WARNED_AGENT_ONLY = True
+
+
 def _stub(reason: str, message: str) -> Extraction:
     return Extraction(text=message, status="stub", reason=reason, pages=0, truncated=False)
 
 
-def _render_sidecar(rel: str, extraction: Extraction) -> str:
+def _render_sidecar(rel: str, extraction: Extraction, *, version: str = EXTRACTOR_VERSION) -> str:
     """Render the final sidecar Markdown: a source/extractor comment header,
     then either the page transcript (``status == "ok"``) or non-empty stub
-    prose naming the source file (empty sidecars yield zero chunks)."""
+    prose naming the source file (empty sidecars yield zero chunks).
+
+    *version* is stamped into the header's ``extractor:`` field —
+    ``EXTRACTOR_VERSION`` for pypdf output, ``AGENT_EXTRACTOR_VERSION`` for
+    an agent-authored transcript (see ``register_sidecar``)."""
     header = (
         f"<!-- source: {rel} -->\n"
-        f"<!-- extractor: {EXTRACTOR_VERSION} status: {extraction.status} "
+        f"<!-- extractor: {version} status: {extraction.status} "
         f"reason: {extraction.reason} -->\n"
     )
     if extraction.status == "ok":
@@ -480,7 +599,14 @@ def _is_cache_hit(
         return False
     if entry.get("sha256") != sha256:
         return False
-    if entry.get("extractor_version") != EXTRACTOR_VERSION:
+    if entry.get("extractor_version") not in _ACCEPTED_EXTRACTOR_VERSIONS:
+        return False
+    # A hand-corrupted manifest entry missing either key is treated as a
+    # cache miss (triggering a fresh extraction), not a KeyError later in
+    # ensure_sidecar's cache-hit branch (which reads entry["status"]).
+    if not entry.get("status"):
+        return False
+    if not entry.get("sidecar"):
         return False
     try:
         actual_size = sidecar_path.stat().st_size
@@ -530,13 +656,22 @@ def ensure_sidecar(
         text = sidecar_path.read_text(encoding="utf-8")
         sidecar = Sidecar(
             docid=sidecar_rel, path=sidecar_path, text=text,
-            status=entry["status"], reason=entry.get("reason", ""), cache_hit=True,
+            status=entry.get("status", "ok"), reason=entry.get("reason", ""), cache_hit=True,
         )
         _PROCESS_MEMO[memo_key] = sidecar
         return sidecar
 
-    if backend_available():
-        extractor = extractor_for(source_path) or _extract_pdf
+    extractor = extractor_for(source_path)
+    if extractor is None:
+        # Agent-only suffix (e.g. .docx, .png): no machine extractor
+        # exists at all, so this is never a "backend missing" situation
+        # and must never look like one — needs_reextraction/_is_cache_hit
+        # key on the literal "backend-missing" reason to self-heal a stub
+        # once pypdf becomes available, and an agent-only stub must never
+        # be caught by that (it would loop forever re-stubbing a docx).
+        _warn_agent_only()
+        extraction = _stub("agent-only", _MSG_AGENT_ONLY)
+    elif backend_available():
         extraction = extractor(data)
     else:
         _warn_backend_missing()
@@ -569,3 +704,174 @@ def ensure_sidecar(
     )
     _PROCESS_MEMO[memo_key] = sidecar
     return sidecar
+
+
+def _truncate_agent_transcript(text: str) -> Tuple[str, bool]:
+    """Truncate an over-budget agent-authored *text* to fit
+    ``MAX_TRANSCRIPT_CHARS``, preferring a whole-page-boundary cut (reusing
+    ``_truncate_at_page_boundary``) when ``## Page N`` headings are present,
+    else a plain character slice with the same truncation marker."""
+    heading_starts = [m.start() for m in _PAGE_HEADING_RE.finditer(text)]
+    if heading_starts:
+        segments = []
+        for i, start in enumerate(heading_starts):
+            end = heading_starts[i + 1] if i + 1 < len(heading_starts) else len(text)
+            segments.append(text[start:end].rstrip("\n"))
+        return _truncate_at_page_boundary(segments)
+    marker = "\n\n_[transcript truncated: exceeded extraction size budget]_"
+    return text[: MAX_TRANSCRIPT_CHARS - len(marker)] + marker, True
+
+
+def register_sidecar(
+    root: "os.PathLike[str] | str",
+    source: "os.PathLike[str] | str",
+    transcript: str,
+    *,
+    truncated: bool = False,
+) -> Sidecar:
+    """Register an agent-authored *transcript* as *source*'s sidecar.
+
+    The no-pypdf recovery path for PDFs, and the **only** indexing path for
+    ``AGENT_ONLY_EXTENSIONS`` media (docx/pptx/xlsx/images), which have no
+    machine extractor at all: a coding agent that read *source* natively
+    (e.g. via its own ``Read`` tool, or vision for an image) can hand-write
+    the extracted text and register it here instead of (or in place of)
+    installing the ``pdf`` extra. Never imports ``pypdf`` on any path — this
+    function works identically whether or not the backend is installed.
+
+    Writes the same sidecar-Markdown shape ``ensure_sidecar`` would (source
+    + extractor header, then the transcript), stamped with
+    ``AGENT_EXTRACTOR_VERSION`` so ``_is_cache_hit`` recognizes it as fresh
+    and ``needs_reextraction``/``extract --force`` know not to silently
+    treat it as a stale pypdf stub (see module docstring's supersede
+    policy). *truncated* is the caller-declared truncation flag when the
+    caller already truncated its own transcript upstream; this function
+    additionally truncates at ``MAX_TRANSCRIPT_CHARS`` itself if needed,
+    OR-ing the two flags together.
+    """
+    root_path = Path(root).resolve()
+    source_path = Path(source).resolve()
+    try:
+        rel = source_path.relative_to(root_path).as_posix()
+    except ValueError:
+        raise ValueError(f"{source_path} is not under root {root_path}") from None
+    if not source_path.is_file():
+        raise ValueError(f"source file not found: {source_path}")
+    if source_path.suffix.lower() not in EXTRACTABLE_EXTENSIONS:
+        raise ValueError(
+            f"{rel!r} has a suffix not in EXTRACTABLE_EXTENSIONS "
+            f"({sorted(EXTRACTABLE_EXTENSIONS)})"
+        )
+
+    if not transcript.strip():
+        raise ValueError("transcript is empty")
+
+    text = _LEADING_COMMENT_RE.sub("", transcript)
+    pages = len(_PAGE_HEADING_RE.findall(text))
+    if len(text) > MAX_TRANSCRIPT_CHARS:
+        text, was_truncated = _truncate_agent_transcript(text)
+        truncated = truncated or was_truncated
+
+    data = source_path.read_bytes()
+    sha256 = hashlib.sha256(data).hexdigest()
+
+    extraction = Extraction(text=text, status="ok", reason="", pages=pages, truncated=truncated)
+    sidecar_text = _render_sidecar(rel, extraction, version=AGENT_EXTRACTOR_VERSION)
+    sidecar_rel = sidecar_relpath(rel)
+    sidecar_path = root_path / sidecar_rel
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    sidecar_path.write_text(sidecar_text, encoding="utf-8")
+    sidecar_sha256 = hashlib.sha256(sidecar_text.encode("utf-8")).hexdigest()
+
+    manifest = load_manifest(root_path)
+    entries = manifest.setdefault("entries", {})
+    entries[rel] = {
+        "sha256": sha256,
+        "source_bytes": len(data),
+        "extractor_version": AGENT_EXTRACTOR_VERSION,
+        "sidecar": sidecar_rel,
+        "sidecar_bytes": len(sidecar_text.encode("utf-8")),
+        "pages": pages,
+        "status": "ok",
+        "reason": "",
+        "truncated": truncated,
+        "authored_by": AUTHORED_BY_AGENT,
+        "authored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "sidecar_sha256": sidecar_sha256,
+    }
+    manifest["schema"] = 1
+    manifest["extractor_version"] = EXTRACTOR_VERSION
+    manifest["engine_version"] = _engine_version()
+    manifest["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    save_manifest(root_path, manifest)
+
+    invalidate_process_cache(source_path)
+
+    return Sidecar(
+        docid=sidecar_rel, path=sidecar_path, text=sidecar_text,
+        status="ok", reason="", cache_hit=False,
+    )
+
+
+def agent_sidecar_revision(entry: Dict[str, Any]) -> str:
+    """Return *entry*'s ``sidecar_sha256`` when it's an agent-authored
+    manifest entry, else ``""``.
+
+    Feeds ``persistence.compute_fingerprint``: mixing this into a
+    discovered file's fingerprint line makes an agent transcript's own
+    content (not just the source PDF's stat) part of staleness detection,
+    so re-registering a changed transcript triggers a reindex even though
+    the source PDF's own bytes/mtime never changed.
+    """
+    if entry.get("authored_by") != AUTHORED_BY_AGENT:
+        return ""
+    return entry.get("sidecar_sha256", "")
+
+
+def _entry_state(entry: Dict[str, Any] | None, source_path: Path) -> str:
+    """Classify one source file's manifest *entry* into a ``sidecar_states``
+    state label: ``missing`` (no entry yet), ``outdated`` (entry's
+    ``sha256`` no longer matches the source file's current content),
+    ``agent-authored`` (written by ``register_sidecar``, source unchanged),
+    ``stub`` (entry's ``status`` is ``"stub"``, e.g. a ``backend-missing``
+    placeholder), or ``ok`` (a fresh pypdf-extracted transcript)."""
+    if entry is None:
+        return "missing"
+    sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    if entry.get("sha256") != sha256:
+        return "outdated"
+    if entry.get("authored_by") == AUTHORED_BY_AGENT:
+        return "agent-authored"
+    if entry.get("status") == "stub":
+        return "stub"
+    return "ok"
+
+
+def _sidecar_state_record(rel: str, entry: Dict[str, Any] | None, state: str) -> Dict[str, Any]:
+    """One ``sidecar_states`` result record for *rel*'s *entry* (``None``
+    when *state* is ``"missing"``) and its classified *state*."""
+    return {
+        "rel": rel,
+        "state": state,
+        "sidecar": entry.get("sidecar") if entry else None,
+        "status": entry.get("status") if entry else None,
+        "reason": entry.get("reason", "") if entry else "",
+        "pages": entry.get("pages", 0) if entry else 0,
+        "authored_at": entry.get("authored_at") if entry else None,
+    }
+
+
+def sidecar_states(
+    root: "os.PathLike[str] | str", sources: Iterable["os.PathLike[str] | str"]
+) -> List[Dict[str, Any]]:
+    """Report each of *sources*' sidecar state, for ``retrieval sidecar
+    --list`` (see ``_entry_state`` for the state taxonomy)."""
+    root_path = Path(root).resolve()
+    entries = load_manifest(root_path).get("entries", {})
+    results: List[Dict[str, Any]] = []
+    for source in sources:
+        source_path = Path(source).resolve()
+        rel = source_path.relative_to(root_path).as_posix()
+        entry = entries.get(rel)
+        results.append(_sidecar_state_record(rel, entry, _entry_state(entry, source_path)))
+    return results

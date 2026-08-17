@@ -7,3 +7,5 @@
 - MCP
 - textrank
 - graphify
+- Docs/PPT/Excel (Office)
+- Video/Audio (codec)

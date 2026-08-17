@@ -1,12 +1,21 @@
 # `retrieval.extractors`
 
-Sidecar-transcript extraction for non-text-native document formats (PDF).
-Stdlib-only at import scope — this module must import cleanly with zero
-optional extras installed, same guarantee as the rest of the default
-pipeline; the `pypdf` backend is imported lazily, only inside the functions
-that actually need it.
+Sidecar-transcript extraction for non-text-native document formats (PDF +
+agent-only media). Stdlib-only at import scope — this module must import
+cleanly with zero optional extras installed, same guarantee as the rest of
+the default pipeline; the `pypdf` backend is imported lazily, only inside
+the functions that actually need it.
 
-A PDF's extracted text is written once to a Markdown "sidecar" file under
+`EXTRACTABLE_EXTENSIONS` splits into two tiers:
+
+- `MACHINE_EXTRACTABLE_EXTENSIONS` (`{".pdf"}`) — has a registered machine
+  extractor (`pypdf`).
+- `AGENT_ONLY_EXTENSIONS` (`.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`,
+  `.jpeg`, `.gif`, `.webp`) — no machine extractor exists at all; every such
+  file always indexes as an `"agent-only"`-reason stub, and `retrieval
+  sidecar --register` is the only way to index its real content.
+
+A file's extracted text is written once to a Markdown "sidecar" file under
 `<project-root>/.agentic-retrieval/extracted/<rel-path>.md` (always under
 the project root, deliberately ignoring `RETRIEVAL_INDEX_DIR` — a sidecar is
 a citation target a coding agent `Read()`s by project-relative path, so it
@@ -17,22 +26,41 @@ unchanged files across the multiple loader passes `index --auto` performs
 per run.
 
 Every failure mode (encrypted, malformed, empty, no-text-layer,
-backend-missing) still produces a non-empty, human-readable stub sidecar —
-an empty sidecar would yield zero chunks and silently vanish from every
-index.
+backend-missing, agent-only) still produces a non-empty, human-readable
+stub sidecar — an empty sidecar would yield zero chunks and silently vanish
+from every index.
+
+Key public functions relevant to the agent-authored recovery path:
+`register_sidecar` (write a sidecar from a hand-authored transcript, never
+imports `pypdf`), `sidecar_states` (per-source-file state report backing
+`retrieval sidecar --list`), and `agent_sidecar_revision` (extracts the
+fingerprint-relevant revision string from a manifest entry, consumed by
+`retrieval.persistence.compute_fingerprint`).
 
 ::: retrieval.extractors
 
-## Stub taxonomy
+## Extractor-version / status taxonomy
+
+| `extractor_version` | Written by | `status` |
+|---|---|---|
+| `pypdf-text/1` (`EXTRACTOR_VERSION`) | `ensure_sidecar` (the `pypdf` backend) | `ok`, or `stub` (see the stub taxonomy below) |
+| `agent-authored/1` (`AGENT_EXTRACTOR_VERSION`) | `register_sidecar` (an agent-authored transcript) | always `ok` — an agent transcript never renders as a stub |
+
+Both extractor-version strings are accepted as "fresh" by `_is_cache_hit`
+(membership in `_ACCEPTED_EXTRACTOR_VERSIONS`, not equality against a
+single constant).
+
+## Stub taxonomy (`status == "stub"`)
 
 | `reason` | When |
 |---|---|
-| `encrypted` | Password-protected; the empty-password decrypt attempt failed |
-| `crypto-unavailable` | Encrypted with a method needing the optional `cryptography` package |
-| `empty` | Zero pages |
-| `no-text-layer` | Scanned/image-only document (no OCR performed) |
+| `encrypted` | Password-protected PDF; the empty-password decrypt attempt failed |
+| `crypto-unavailable` | Encrypted PDF using a method needing the optional `cryptography` package |
+| `empty` | PDF with zero pages |
+| `no-text-layer` | Scanned/image-only PDF (no OCR performed) |
 | `malformed` | Corrupted or unsupported PDF structure |
-| `backend-missing` | `pypdf` is not installed |
+| `backend-missing` | PDF, but `pypdf` is not installed |
+| `agent-only` | `AGENT_ONLY_EXTENSIONS` suffix (docx/pptx/xlsx/image) — no machine extractor exists for this format at all, regardless of what's installed; distinct from `backend-missing` so it's never mistaken for a stale pypdf stub that self-heals once pypdf becomes available (`needs_reextraction`/`_is_cache_hit` key on the literal `"backend-missing"` string) |
 
 ## Backend-missing degradation vs. hard failure
 
@@ -42,7 +70,32 @@ stub, with a single `warning: pypdf is not installed` line printed to
 stderr per process (`_warn_backend_missing`). The `retrieval extract`
 subcommand is the one place a missing backend *does* hard-fail, via an
 explicit preflight `require_extractors()` call — see [CLI reference:
-`extract`](../cli.md#extract).
+`extract`](../cli.md#extract). `require_extractors`'s guidance message and
+the `backend-missing` stub's own text both point at `retrieval sidecar
+--register` as the no-install alternative.
+
+## Supersede policy: agent-authored entries are never auto-replaced
+
+An agent-authored sidecar (`register_sidecar`) is treated as a durable,
+first-class transcript — installing the `pdf` extra later does **not**
+cause it to be silently regenerated by pypdf (`needs_reextraction` and
+`_is_cache_hit`'s backend-missing check both stay pinned on the literal
+`reason == "backend-missing"` string, which an agent entry never has). The
+one deliberate escape hatch is `retrieval extract --force`, which prints
+`warning: overwriting N agent-authored sidecar(s) with pypdf output` to
+stderr before doing so.
+
+## Agent-only media has no degradation path
+
+Unlike PDF's `backend-missing` stub, an `agent-only` stub never
+"self-heals": `require_extractors` and `backend_available()` both only ever
+concern `pypdf`/`MACHINE_EXTRACTABLE_EXTENSIONS`, so there is no install
+that turns an `agent-only` stub into a real transcript — `retrieval sidecar
+--register` is the only path. `extract` never attempts these suffixes
+either (see [CLI reference: `extract`](../cli.md#extract)); its `--prune`
+keep-set still preserves a registered agent-only sidecar, since pruning is
+based on discovery (`extractors.EXTRACTABLE_EXTENSIONS`), not on what
+`extract`'s own extraction loop touched.
 
 ## Next steps
 

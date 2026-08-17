@@ -7,6 +7,7 @@ load_index's None-on-missing/corrupt behavior; project_key uniqueness per
 root; and the RETRIEVAL_INDEX_DIR env override.
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -644,6 +645,137 @@ class TestPersistence(unittest.TestCase):
             found = list(discover_files(root))
             self.assertTrue(any(p.name == "a.txt" for p in found))
             self.assertFalse(any(".agentic-retrieval" in p.parts for p in found))
+
+
+class TestAgentSidecarFingerprint(unittest.TestCase):
+    """Coverage for compute_fingerprint's agent-sidecar-revision mixin (T:
+    ``extractors.agent_sidecar_revision``) — an agent-authored transcript
+    (not pypdf) must factor into staleness even when the source PDF's own
+    bytes/mtime are unchanged, while a corpus with no agent entries
+    fingerprints byte-identically to the pre-0.9.0 format."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    def test_fingerprint_byte_identical_when_no_agent_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "a.txt", "hello world")
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            fp = compute_fingerprint(root)
+
+            digest = hashlib.sha256()
+            for file_path in discover_files(root):
+                rel = file_path.relative_to(root).as_posix()
+                stat = file_path.stat()
+                digest.update(f"{rel}|{stat.st_size}|{stat.st_mtime_ns}\n".encode("utf-8"))
+            self.assertEqual(fp, digest.hexdigest())
+
+    def test_fingerprint_changes_after_agent_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            fp_before = compute_fingerprint(root)
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            fp_after = compute_fingerprint(root)
+            self.assertNotEqual(fp_before, fp_after)
+
+    def test_fingerprint_stable_when_same_transcript_reregistered(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            fp1 = compute_fingerprint(root)
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            fp2 = compute_fingerprint(root)
+            self.assertEqual(fp1, fp2)
+
+    def test_fingerprint_reverts_when_agent_entry_replaced_by_pypdf_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            fp_no_manifest = compute_fingerprint(root)
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            fp_agent = compute_fingerprint(root)
+            self.assertNotEqual(fp_no_manifest, fp_agent)
+
+            # Simulate a pypdf-authored entry superseding the agent entry
+            # (e.g. via 'extract --force'): the fingerprint no longer mixes
+            # in a sidecar revision, reverting to the pre-agent base line.
+            manifest = extractors.load_manifest(root)
+            old_entry = manifest["entries"]["doc.pdf"]
+            manifest["entries"]["doc.pdf"] = {
+                "sha256": old_entry["sha256"],
+                "extractor_version": extractors.EXTRACTOR_VERSION,
+                "sidecar": old_entry["sidecar"],
+                "sidecar_bytes": old_entry["sidecar_bytes"],
+                "pages": 0,
+                "status": "stub",
+                "reason": "backend-missing",
+                "truncated": False,
+            }
+            extractors.save_manifest(root, manifest)
+            fp_reverted = compute_fingerprint(root)
+            self.assertEqual(fp_reverted, fp_no_manifest)
+
+    def test_is_stale_true_after_agent_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_chunk_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.9.0")
+            _retriever, meta = load_index(root)
+            self.assertFalse(is_stale(root, meta))
+
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            self.assertTrue(is_stale(root, meta))
+
+    def test_is_stale_false_after_reindex_following_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            fingerprint = compute_fingerprint(root)
+            retriever = LexicalRetriever()
+            retriever.index(load_chunk_documents(root))
+            save_index(retriever, root, fingerprint, "lexical", "0.9.0")
+            _retriever, meta = load_index(root)
+            self.assertFalse(is_stale(root, meta))
+
+    def test_no_pdf_loader_kw_ignores_agent_entries(self) -> None:
+        # An explicit loader_kw that excludes PDFs from discover_files
+        # (e.g. --no-pdf) never reaches compute_fingerprint's extractable-
+        # suffix branch, so an agent entry has no effect on the fingerprint.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "a.txt", "hello world")
+            pdf_path = root / "doc.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+            loader_kw = {"extensions": frozenset({".txt"})}
+            fp_before = compute_fingerprint(root, **loader_kw)
+            extractors.register_sidecar(root, pdf_path, "hand-authored transcript")
+            fp_after = compute_fingerprint(root, **loader_kw)
+            self.assertEqual(fp_before, fp_after)
+
+    def test_fingerprint_changes_after_registering_png_transcript(self) -> None:
+        # Agent-only media (no machine extractor) mixes an agent sidecar
+        # revision into the fingerprint the same way a PDF does.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            png_path = root / "diagram.png"
+            png_path.write_bytes(b"not a real png payload")
+            fp_before = compute_fingerprint(root)
+            extractors.register_sidecar(root, png_path, "A diagram of three boxes.")
+            fp_after = compute_fingerprint(root)
+            self.assertNotEqual(fp_before, fp_after)
 
 
 if __name__ == "__main__":

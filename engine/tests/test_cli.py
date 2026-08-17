@@ -994,6 +994,238 @@ class TestCliPdfAutoActivation(unittest.TestCase):
         self.assertEqual(err.count("error:"), 1)
         self.assertIn(".[pdf]", err)
 
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_extract_prune_does_not_delete_registered_non_pdf_media_sidecar(self) -> None:
+        docx_path = self.root / "report.docx"
+        docx_path.write_bytes(b"not a real docx payload")
+        extractors.register_sidecar(self.root, docx_path, "Hand-authored docx transcript.")
+        sidecar_path = self.root / ".agentic-retrieval" / "extracted" / "report.docx.md"
+        self.assertTrue(sidecar_path.exists())
+
+        code, out = _run(["extract", "--root", str(self.root), "--prune"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("pruned 1", out)
+        self.assertTrue(sidecar_path.exists())
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_extract_does_not_attempt_non_pdf_media(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        _write_pdf(pdf_path, pages=1)
+        docx_path = self.root / "report.docx"
+        docx_path.write_bytes(b"not a real docx payload")
+
+        code, out = _run(["extract", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(len(payload["files"]), 1)
+        self.assertEqual(payload["files"][0]["source"], "docs/paper.pdf")
+        # extract never touched the .docx: no sidecar/manifest entry exists.
+        docx_sidecar = self.root / ".agentic-retrieval" / "extracted" / "report.docx.md"
+        self.assertFalse(docx_sidecar.exists())
+
+
+class TestSidecarCommand(unittest.TestCase):
+    """CLI-surface coverage for the no-pypdf 'sidecar' subcommand: --list
+    and --register never import/require pypdf (contrast with 'extract',
+    which hard-fails without it)."""
+
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+        extractors.clear_process_cache()
+        extractors._WARNED = False
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+        self._project_tmp.cleanup()
+        extractors.clear_process_cache()
+        extractors._WARNED = False
+
+    def test_sidecar_list_reports_stub_state_without_pypdf(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        code, out = _run(["sidecar", "--list", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("docs/paper.pdf: missing", out)
+
+        original = extractors.backend_available
+        extractors.backend_available = lambda: False
+        try:
+            extractors.ensure_sidecar(self.root, pdf_path)
+            code, out = _run(["sidecar", "--list", "--root", str(self.root)])
+        finally:
+            extractors.backend_available = original
+        self.assertEqual(code, 0)
+        self.assertIn("docs/paper.pdf: stub (backend-missing)", out)
+
+    def test_sidecar_list_json_shape(self) -> None:
+        pdf_path = self.root / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        code, out = _run(["sidecar", "--list", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["root"], str(self.root.resolve()))
+        self.assertIn("backend_available", payload)
+        self.assertEqual(len(payload["files"]), 1)
+        self.assertEqual(payload["files"][0]["rel"], "paper.pdf")
+        self.assertEqual(payload["files"][0]["state"], "missing")
+
+    def test_sidecar_list_reports_agent_authored_after_register(self) -> None:
+        pdf_path = self.root / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+        extractors.register_sidecar(self.root, pdf_path, "hand-authored transcript")
+
+        code, out = _run(["sidecar", "--list", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(payload["files"][0]["state"], "agent-authored")
+
+    def test_sidecar_register_from_file(self) -> None:
+        pdf_path = self.root / "docs" / "paper.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+        transcript_path = self.root / "transcript.md"
+        transcript_path.write_text("## Page 1\n\nHand-authored content.", encoding="utf-8")
+
+        code, out = _run(
+            [
+                "sidecar", "--register", str(pdf_path),
+                "--transcript", str(transcript_path), "--root", str(self.root),
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("docs/paper.pdf ->", out)
+        sidecar_path = self.root / ".agentic-retrieval" / "extracted" / "docs" / "paper.pdf.md"
+        self.assertTrue(sidecar_path.exists())
+        self.assertIn("Hand-authored content.", sidecar_path.read_text(encoding="utf-8"))
+
+    def test_sidecar_register_from_stdin(self) -> None:
+        pdf_path = self.root / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch(
+            "sys.stdin", io.StringIO("## Page 1\n\nFrom stdin.")
+        ):
+            code = main(
+                [
+                    "sidecar", "--register", str(pdf_path),
+                    "--transcript", "-", "--root", str(self.root),
+                ]
+            )
+        self.assertEqual(code, 0)
+        sidecar_path = self.root / ".agentic-retrieval" / "extracted" / "paper.pdf.md"
+        self.assertIn("From stdin.", sidecar_path.read_text(encoding="utf-8"))
+
+    def test_sidecar_register_missing_source_exits_nonzero_with_guidance(self) -> None:
+        # Transcript comes from a real file (not stdin) here: the point
+        # under test is the missing-source error path, and reading actual
+        # process stdin in-process would block the test run indefinitely.
+        transcript_path = self.root / "transcript.md"
+        transcript_path.write_text("## Page 1\n\ncontent", encoding="utf-8")
+        code, _out, err = _run_with_stderr(
+            [
+                "sidecar", "--register", str(self.root / "nope.pdf"),
+                "--transcript", str(transcript_path), "--root", str(self.root),
+            ]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("error:", err)
+
+    def test_sidecar_requires_list_or_register(self) -> None:
+        with self.assertRaises(SystemExit):
+            with redirect_stderr(io.StringIO()):
+                main(["sidecar", "--root", str(self.root)])
+
+    def test_query_auto_reindexes_after_sidecar_registration(self) -> None:
+        _write(self.root / "a.txt", "routers forward packets between networks")
+        pdf_path = self.root / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\nnot a real body")
+
+        code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+
+        extractors.register_sidecar(
+            self.root, pdf_path, "## Page 1\n\nA distinctive elephant migration pattern."
+        )
+
+        # Bare query, no --force: registration changed the fingerprint (via
+        # agent_sidecar_revision), so this must auto-reindex and surface a
+        # hit from the newly registered transcript.
+        code, out = _run(
+            [
+                "query", "distinctive elephant migration pattern",
+                "--root", str(self.root), "--retriever", "lexical", "--top-k", "1",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(".agentic-retrieval/extracted/paper.pdf.md", out)
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_extract_force_warns_before_overwriting_agent_sidecar(self) -> None:
+        pdf_path = self.root / "paper.pdf"
+        _write_pdf(pdf_path, pages=1)
+        extractors.register_sidecar(self.root, pdf_path, "hand-authored transcript")
+
+        code, _out, err = _run_with_stderr(["extract", "--root", str(self.root), "--force"])
+        self.assertEqual(code, 0)
+        self.assertIn("warning: overwriting 1 agent-authored sidecar(s)", err)
+
+    def test_sidecar_list_reports_docx_as_agent_only_stub(self) -> None:
+        docx_path = self.root / "report.docx"
+        docx_path.write_bytes(b"not a real docx payload")
+
+        code, out = _run(["sidecar", "--list", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("report.docx: missing", out)
+
+        extractors.ensure_sidecar(self.root, docx_path)
+        code, out = _run(["sidecar", "--list", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("report.docx: stub (agent-only)", out)
+
+    def test_sidecar_register_and_query_end_to_end_on_docx(self) -> None:
+        _write(self.root / "a.txt", "routers forward packets between networks")
+        docx_path = self.root / "report.docx"
+        docx_path.write_bytes(b"not a real docx payload")
+
+        code, _out = _run(["index", "--root", str(self.root), "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+
+        transcript_path = self.root / "transcript.md"
+        transcript_path.write_text(
+            "## Page 1\n\nA distinctive elephant migration pattern.", encoding="utf-8"
+        )
+        code, out = _run(
+            [
+                "sidecar", "--register", str(docx_path),
+                "--transcript", str(transcript_path), "--root", str(self.root),
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("report.docx ->", out)
+
+        # Bare query, no --force: registration changed the fingerprint, so
+        # this must auto-reindex and surface a hit from the transcript.
+        code, out = _run(
+            [
+                "query", "distinctive elephant migration pattern",
+                "--root", str(self.root), "--retriever", "lexical", "--top-k", "1",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn(".agentic-retrieval/extracted/report.docx.md", out)
+
 
 if __name__ == "__main__":
     unittest.main()

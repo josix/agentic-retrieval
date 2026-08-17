@@ -147,13 +147,34 @@ def compute_fingerprint(root: "os.PathLike[str] | str", **loader_kw: Any) -> str
     deterministic sorted order ``discover_files`` returns, hashed together —
     so any file addition, removal, resize, or mtime change (edit) alters the
     fingerprint, without reading file contents.
+
+    For a discovered file whose suffix is in
+    ``extractors.EXTRACTABLE_EXTENSIONS`` (e.g. a PDF) *and* whose manifest
+    entry is agent-authored (``register_sidecar``, not pypdf), the line
+    instead becomes ``"relpath|st_size|st_mtime_ns|sidecar_sha256\\n"`` —
+    re-registering a changed transcript over an *unchanged* source PDF
+    (same size/mtime) must still flip the fingerprint, or a stale cache
+    would never notice the new transcript content. The manifest is loaded
+    lazily, at most once, on the first extractable-suffix file encountered
+    (most corpora have zero PDFs, so this stays a no-op read for them).
+    Invariant: a corpus with no agent-authored manifest entries fingerprints
+    byte-identically to the pre-0.9.0 format — this extension only ever
+    appends a field, never rewrites the base line.
     """
     root_path = Path(root)
     digest = hashlib.sha256()
+    entries: Optional[Dict[str, Any]] = None
     for file_path in discover_files(root_path, **loader_kw):
         rel = file_path.relative_to(root_path).as_posix()
         stat = file_path.stat()
-        digest.update(f"{rel}|{stat.st_size}|{stat.st_mtime_ns}\n".encode("utf-8"))
+        line = f"{rel}|{stat.st_size}|{stat.st_mtime_ns}"
+        if file_path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS:
+            if entries is None:
+                entries = extractors.load_manifest(root_path).get("entries", {})
+            revision = extractors.agent_sidecar_revision(entries.get(rel) or {})
+            if revision:
+                line = f"{line}|{revision}"
+        digest.update((line + "\n").encode("utf-8"))
     return digest.hexdigest()
 
 
