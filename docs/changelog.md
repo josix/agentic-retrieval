@@ -6,6 +6,14 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.10.0 — 2026-08-21
+
+- **\[engine\] Terraform/HCL indexing** — `.tf`, `.tfvars`, and `.hcl` are
+  now in `DEFAULT_EXTENSIONS`, so Terraform and HCL files pass file
+  discovery; they are also added to `chunker.CONFIG_SUFFIXES`, so they
+  chunk under the structured-config policy (`config_chars`) like
+  YAML/TOML. Re-index existing projects to pick them up.
+
 ## 0.9.0 — 2026-08-17
 
 - **\[engine\] Agent-authored PDF sidecar transcripts** — on clients without
