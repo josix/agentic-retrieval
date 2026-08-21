@@ -16,7 +16,9 @@ from retrieval.ast_chunker import LANGUAGE_BY_SUFFIX
 PROSE_SUFFIXES = frozenset({".md", ".markdown", ".rst", ".txt"})
 
 #: File suffixes chunked as structured config (``ChunkingPolicy.config_chars``).
-CONFIG_SUFFIXES = frozenset({".yaml", ".yml", ".toml", ".ini", ".cfg", ".json"})
+CONFIG_SUFFIXES = frozenset(
+    {".yaml", ".yml", ".toml", ".ini", ".cfg", ".json", ".tf", ".tfvars", ".hcl"}
+)
 
 
 @dataclass
