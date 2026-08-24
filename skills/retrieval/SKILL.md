@@ -223,9 +223,9 @@ leaves pypdf uninstalled), a PDF first indexes as a searchable placeholder
 stub instead of a real transcript (one `warning: pypdf is not installed`
 line on stderr). **That warning is expected — and it is your cue to act**:
 an `index` run is not finished for media until the stubs are replaced —
-run the "Without the `pdf` extra: author the transcript yourself" workflow
-below immediately after indexing, so the media index is built before any
-query needs it. Pass `--no-pdf` on `index`
+run the "Author the media transcript yourself (the default media path)"
+workflow below immediately after indexing, so the media index is built
+before any query needs it. Pass `--no-pdf` on `index`
 to opt out entirely; pre-warm a large corpus's PDF sidecars ahead of a
 first `index`/`query` with `retrieval extract` (see
 `docs/reference/cli.md`).
@@ -234,11 +234,14 @@ The same auto-discovery covers a second tier of media with **no machine
 extractor at all**: `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.jpeg`,
 `.gif`, `.webp`. These always index as an `agent-only` stub — there is no
 `--extra` to install, no bulk-extraction fallback — the sidecar workflow
-below is the *only* way to index their real content. `retrieval sidecar
---list` reports them the same way as a PDF stub (`state: stub`, `reason:
-agent-only`).
+below is the *only* way to index their real content, indexed ONLY via
+this workflow. `retrieval sidecar --list` reports them the same way as a
+PDF stub (`state: stub`, `reason: agent-only`). See
+`references/office-image-transcripts.md` for the full authoring guide
+(heading conventions, section sizing, per-format body guidance,
+anti-fabrication rules).
 
-#### Without the `pdf` extra: author the transcript yourself
+#### Author the media transcript yourself (the default media path)
 
 This is the **default media-indexing path** — for PDFs *and* for
 `.docx`/`.pptx`/`.xlsx`/images, which have no machine-extraction option at
@@ -267,13 +270,18 @@ media index yourself instead of leaving placeholder stubs:
    file (most coding-agent `Read` tools render PDF/docx/pptx/xlsx text
    natively); for an image, use your native vision to describe
    content-bearing detail — text visible in the image, structure, meaning.
-   Never fabricate detail you cannot actually see.
+   Never fabricate detail you cannot actually see. If `Read()` returns
+   binary garbage or otherwise fails to render the file, leave the stub as
+   it is — never guess a transcript from the filename alone.
 4. **Write the transcript** to a scratch file: plain prose describing/
-   transcribing the content. `## Page N` headings are the PDF convention
-   (one per page — it's what produces the page breadcrumb in later
-   search-hit context) but are optional for page-less formats; a single
-   `## Page 1` heading is fine, and omitting headings entirely just
-   degrades the breadcrumb gracefully rather than breaking anything. Use
+   transcribing the content, broken into sections with Markdown headings —
+   any `#`-`######` heading produces the section breadcrumb attached to
+   later search-hit context. `## Page N` is the convention for genuinely
+   paginated sources (PDFs); page-less formats have their own conventions
+   instead (`## Slide N — <title>` for pptx, `## Sheet: <name>` for xlsx,
+   `## Section: <heading>` for docx, `## Image: <filename>` for images —
+   see `references/office-image-transcripts.md`). Don't fake `## Page N`
+   headings on a page-less format just to get a breadcrumb. Use
    `_[no text layer]_` for an image-only PDF page. Do not add a `<!--
    source: ... -->` header yourself — `retrieval sidecar --register` adds
    it for you.
@@ -588,8 +596,8 @@ print(r.search("what carries data between networks", top_k=5))
   (`.docx`/`.pptx`/`.xlsx`/images) always does, extra or not, since no
   machine extractor exists for them. Under the default sync this is the
   expected first state, not a failure: `retrieval sidecar --register` is
-  the standard media path (see "Without the `pdf` extra: author the
-  transcript yourself" above), no install required.
+  the standard media path (see "Author the media transcript yourself (the
+  default media path)" above), no install required.
 
 ## Guardrails
 
@@ -606,12 +614,17 @@ print(r.search("what carries data between networks", top_k=5))
   bare `python`/`python3`/`pip install` call, which would bypass that
   isolation and resolve to a different (likely dependency-less) interpreter.
 - **Never fabricate a media transcript**: when authoring a sidecar via
-  `retrieval sidecar --register` (see "Without the `pdf` extra" above),
-  only transcribe content actually present in the file you read/viewed —
-  for an image-only PDF page, write `_[no text layer]_` (or skip that PDF
-  entirely); for a decorative image (logo, icon), either leave the stub or
-  register a one-line description — never invent plausible-sounding
-  content you did not actually see.
+  `retrieval sidecar --register` (see "Author the media transcript
+  yourself" above), only transcribe content actually present in the file
+  you read/viewed — for an image-only PDF page, write `_[no text layer]_`
+  (or skip that PDF entirely); for a decorative image (logo, icon), either
+  leave the stub or register a one-line description — never invent
+  plausible-sounding content you did not actually see. For Office/image
+  formats specifically: if `Read()` fails to render the file or returns
+  binary garbage, leave the stub rather than guessing from the filename;
+  use `_[illegible]_`/`_[no text content]_` for unreadable sections; see
+  `references/office-image-transcripts.md` for the full anti-fabrication
+  guidance.
 - **Never hand-edit a sidecar `.md` file** under
   `.agentic-retrieval/extracted/`: its byte size is part of the cache-hit
   check, so an edit that changes the file's size (without going through

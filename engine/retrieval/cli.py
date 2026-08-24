@@ -1074,8 +1074,11 @@ def _cmd_sidecar_register(args: argparse.Namespace, root: Path) -> int:
     pages = manifest_entries.get(rel, {}).get("pages", 0)
     if pages == 0:
         print(
-            "note: no '## Page N' headings found in the transcript - page "
-            "breadcrumbs will be absent from search-hit context",
+            "note: no '## Page N' headings found - the manifest records 0 "
+            "pages for this source. Section breadcrumbs still come from "
+            "any '## ' heading (e.g. '## Slide 3', '## Sheet: Q3'), so "
+            "this is expected for non-paged formats; do not add fake page "
+            "headings.",
             file=sys.stderr,
         )
 

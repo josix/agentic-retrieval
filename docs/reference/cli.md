@@ -252,13 +252,15 @@ img/diagram.png: stub (agent-only) -> needs transcript
 Writes `SOURCE`'s sidecar from a hand-authored transcript — the recovery
 path when an agent has read the PDF (or docx/pptx/xlsx/image) itself (e.g.
 via its own `Read` tool, or vision for an image) instead of installing
-`pypdf`. See the `retrieval` skill's "Without the `pdf` extra: author the
-transcript yourself" section for the full agent workflow (page-heading
-format — optional for page-less formats, when to use this, lifecycle).
-Prints a `reindex to pick up this sidecar` hint; also warns on stderr if
-`SOURCE` isn't discoverable by the default loader, or if the transcript has
-no `## Page N` headings (page breadcrumbs will be absent from search-hit
-context — harmless for a page-less format). Missing `--transcript` is an
+`pypdf`. See the `retrieval` skill's "Author the media transcript
+yourself (the default media path)" section for the full agent workflow
+(heading conventions per format, when to use this, lifecycle). Prints a
+`reindex to pick up this sidecar` hint; also warns on stderr if `SOURCE`
+isn't discoverable by the default loader, or if the transcript has no
+`## Page N` headings — the manifest's `pages` counter reads `0` in that
+case, which is expected/harmless for a page-less format since section
+breadcrumbs come from any `## ` heading, not specifically `## Page N`.
+Missing `--transcript` is an
 argument-parsing error (exit code 2, mirroring argparse's own
 required-argument handling).
 

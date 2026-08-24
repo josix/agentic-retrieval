@@ -1226,6 +1226,54 @@ class TestSidecarCommand(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(".agentic-retrieval/extracted/report.docx.md", out)
 
+    def test_sidecar_register_zero_pages_note_is_truthful_not_breadcrumb_absent(
+        self,
+    ) -> None:
+        # A non-paged format (here a fake .pptx) has no '## Page N'
+        # headings, so the manifest's `pages` counter is 0 - but section
+        # breadcrumbs still come from the '## Slide N' heading, so the
+        # stderr note must not claim breadcrumbs are absent.
+        pptx_path = self.root / "deck.pptx"
+        pptx_path.write_bytes(b"not a real pptx payload")
+        transcript_path = self.root / "transcript.md"
+        transcript_path.write_text(
+            "## Slide 1 — Intro\n\nWelcome slide content.", encoding="utf-8"
+        )
+
+        code, _out, err = _run_with_stderr(
+            [
+                "sidecar", "--register", str(pptx_path),
+                "--transcript", str(transcript_path), "--root", str(self.root),
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("breadcrumbs will be absent", err)
+        self.assertIn("0 pages", err)
+
+    def test_sidecar_register_zero_pages_sidecar_context_is_slide_heading(self) -> None:
+        pptx_path = self.root / "deck.pptx"
+        pptx_path.write_bytes(b"not a real pptx payload")
+        transcript_path = self.root / "transcript.md"
+        transcript_path.write_text(
+            "## Slide 1 — Intro\n\nWelcome slide content.", encoding="utf-8"
+        )
+
+        code, _out = _run(
+            [
+                "sidecar", "--register", str(pptx_path),
+                "--transcript", str(transcript_path), "--root", str(self.root),
+            ]
+        )
+        self.assertEqual(code, 0)
+
+        documents = load_chunk_documents(self.root)
+        sidecar_docid = ".agentic-retrieval/extracted/deck.pptx.md"
+        doc = next(
+            d for d in documents
+            if d.source_path == sidecar_docid and "Welcome slide content" in d.text
+        )
+        self.assertEqual(doc.context, "Slide 1 — Intro")
+
 
 if __name__ == "__main__":
     unittest.main()

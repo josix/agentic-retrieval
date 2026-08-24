@@ -6,6 +6,26 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## Unreleased
+
+- **\[plugin\] Documented the Office/image sidecar authoring workflow** —
+  new `skills/retrieval/references/office-image-transcripts.md` reference
+  covers heading conventions, section sizing, per-format body guidance,
+  and anti-fabrication rules for `.docx`/`.pptx`/`.xlsx`/image sidecars.
+  `skills/retrieval/SKILL.md`'s "Without the `pdf` extra: author the
+  transcript yourself" section is renamed "Author the media transcript
+  yourself (the default media path)" to reflect that this is the only
+  workflow for these formats, not a PDF fallback.
+- **\[docs\] Cross-referenced the new authoring guide** — `commands/retrieval.md`,
+  `docs/how-to/customize-indexing.md`, `docs/reference/cli.md`, and
+  `docs/reference/troubleshooting.md` now point at the renamed SKILL.md
+  section and the new reference doc.
+- **\[engine\] Truthful zero-pages note** — `retrieval sidecar --register`'s
+  stderr note for a transcript with no `## Page N` headings no longer
+  claims breadcrumbs will be absent; it now explains the manifest's
+  `pages` counter is cosmetic for non-paged formats and that breadcrumbs
+  still come from any `## ` heading.
+
 ## 0.10.0 — 2026-08-21
 
 - **\[engine\] Terraform/HCL indexing** — `.tf`, `.tfvars`, and `.hcl` are

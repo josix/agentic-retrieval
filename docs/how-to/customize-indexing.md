@@ -10,7 +10,7 @@
 | `exclude_globs` | `DEFAULT_EXCLUDE_GLOBS` | Filename deny-list globs (secret-looking names) |
 | `include_basenames` | `DEFAULT_INCLUDE_BASENAMES` | Extensionless basenames allowed regardless of `extensions` (e.g. add `'justfile'`) |
 | `max_bytes` | `MAX_FILE_BYTES` (1 MB) | Per-file size cap |
-| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (PDF + agent-only media) — see [PDF auto-indexing](#pdf-auto-indexing) below |
+| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (PDF + agent-only media) — see [PDF auto-indexing](#pdf-auto-indexing) below. A source over this cap never appears in `retrieval sidecar --list` at all (excluded at discovery); raise this override for a large corpus |
 
 ## PDF auto-indexing
 
@@ -70,8 +70,14 @@ rather than being silently skipped as binary.
   transcript's content hash), so re-registering a changed transcript over
   an otherwise-unchanged source file still triggers a reindex. See
   [Reference: CLI](../reference/cli.md#sidecar) and the `retrieval` skill's
-  "Without the `pdf` extra: author the transcript yourself" section for the
-  full workflow.
+  "Author the media transcript yourself (the default media path)" section
+  for the full workflow. For agent-only media specifically (`.docx`,
+  `.pptx`, `.xlsx`, images), use this heading convention per format so the
+  section breadcrumb is meaningful: `## Section: <heading>` (docx,
+  fallback `## Part N`), `## Slide N — <title>` (pptx), `## Sheet: <name>`
+  (xlsx), `## Image: <filename>` or `## Figure: <caption>` (images) — see
+  `skills/retrieval/references/office-image-transcripts.md` for the full
+  authoring guide.
 
 ## Extend, don't replace
 
