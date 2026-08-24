@@ -1082,6 +1082,21 @@ class TestCaptionExtraction(unittest.TestCase):
             entry = extractors.load_manifest(root)["entries"]["talk.srt"]
             self.assertEqual(entry["extractor_version"], extractors.CAPTIONS_EXTRACTOR_VERSION)
 
+    def test_captions_extractor_version_stamped_in_sidecar_header(self) -> None:
+        # Regression: _render_sidecar was called without version= at its
+        # ensure_sidecar call site, so every sidecar's on-disk
+        # "<!-- extractor: ... -->" header comment was stamped
+        # pypdf-text/1 even for captions (the manifest's own
+        # extractor_version was correct; only the rendered file's header
+        # comment lied about its provenance).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            srt_path = root / "talk.srt"
+            _write_srt(srt_path, self._SRT)
+            sidecar = extractors.ensure_sidecar(root, srt_path)
+            self.assertIn(f"extractor: {extractors.CAPTIONS_EXTRACTOR_VERSION}", sidecar.text)
+            self.assertNotIn(f"extractor: {extractors.EXTRACTOR_VERSION}", sidecar.text)
+
     def test_cache_hit_on_second_call(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)

@@ -1086,7 +1086,7 @@ def ensure_sidecar(
     else:
         extraction = extractor(data)
 
-    sidecar_text = _render_sidecar(rel, extraction)
+    sidecar_text = _render_sidecar(rel, extraction, version=extractor_version_for(source_path))
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path.write_text(sidecar_text, encoding="utf-8")
 
