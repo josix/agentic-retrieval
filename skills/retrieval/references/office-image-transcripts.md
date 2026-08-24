@@ -13,7 +13,11 @@ covers the Office/image-specific mechanics that section only summarizes.
 `.docx`/`.pptx`/`.xlsx`/image file as `state: stub`, `reason: agent-only`.
 There is nothing to install, and no `--extra` flips this — `retrieval
 extract` never touches these suffixes; `sidecar --register` is the only
-way to replace the stub with real content.
+way to replace the stub with real content. The `stub` state only appears
+once a manifest entry exists for the file, which requires a first
+`retrieval index` (or any `retrieval query`) pass — on a pristine project
+that hasn't been indexed yet, `--list` reports the file as `missing`
+instead.
 
 ## Read strategy
 
