@@ -38,7 +38,7 @@ Build and persist an index for a project root.
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to index |
 | `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid,treesitter}` | **`all`** | Retriever(s) to build |
 | `--force` | off | Rebuild even if a fresh (non-stale) cache already exists |
-| `--no-pdf` | off | Exclude PDFs and every other sidecar-routed media suffix (docx/pptx/xlsx/images) from discovery — an escape hatch for the default auto-activated sidecar-extraction pipeline (see [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)). Persisted in the cache's meta, so it's sticky across later flag-less `index`/`query` calls |
+| `--no-pdf` | off | Exclude PDFs and every other sidecar-routed media suffix (captions, docx/pptx/xlsx/images, audio/video) from discovery — an escape hatch for the default auto-activated sidecar-extraction pipeline (see [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)). Persisted in the cache's meta, so it's sticky across later flag-less `index`/`query` calls |
 | `--allow-large-context` | off | Skip the `lexical+ctx` large-corpus guard (warns above 500 chunks, refuses above 2000 without this flag — each chunk costs one LLM call at index time) |
 
 Each retriever has its own cache slot per project, so e.g. a fresh
@@ -174,75 +174,92 @@ results; `1` only if even `lexical` is unusable.
 
 ## `extract`
 
-Pre-warm every PDF's sidecar transcript under a project root, without
-building or touching any retriever index — useful for pre-warming a large
-corpus's extraction cache ahead of time (e.g. in CI, or before a first
-`index` run) so that `index`/`query` don't pay the extraction cost inline.
-**PDF only** — `extract` never attempts agent-only media (`.docx`, `.pptx`,
-`.xlsx`, images), which have no machine extractor to run; those always need
-`sidecar --register`.
+Pre-warm every machine-extractable sidecar transcript (PDF + caption files)
+under a project root, without building or touching any retriever index —
+useful for pre-warming a large corpus's extraction cache ahead of time
+(e.g. in CI, or before a first `index` run) so that `index`/`query` don't
+pay the extraction cost inline. **Machine-extractable formats only** —
+`extract` never attempts agent-only media (`.docx`, `.pptx`, `.xlsx`,
+images) or agent-orchestrated audio/video, neither of which has a machine
+extractor to run; those always need `sidecar --register`.
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to extract from |
-| `--force` | off | Re-extract every PDF even if its cached sidecar is already fresh |
-| `--prune` | off | Remove manifest entries and sidecar files for PDFs and media no longer present under `--root` (registered agent-only sidecars are kept, not just PDFs, even though this loop never extracts them) |
+| `--force` | off | Re-extract every file even if its cached sidecar is already fresh |
+| `--prune` | off | Remove manifest entries and sidecar files for media no longer present under `--root` (registered agent-only/agent-orchestrated sidecars are kept, not just machine-extracted ones, even though this loop never extracts them) |
 | `--json` | off | Emit a JSON summary instead of one progress line per file |
 
-Discovers PDFs the same way `index`/`query` do (`discover_files` with
+Discovers files the same way `index`/`query` do (`discover_files` with
 default kwargs, filtered to `MACHINE_EXTRACTABLE_EXTENSIONS`), then calls
 `retrieval.extractors.ensure_sidecar` on each. This is the **only** place
-PDF extraction hard-fails when the `pdf` extra isn't installed: a preflight
-`require_extractors` call raises a guidance `RuntimeError` (exit code 1,
-`error: PDF extraction needs the 'pdf' extra:\n  uv pip install -e
-'.[pdf]'` on stderr) before any file is touched — `index`/`query` never do
-this; they degrade to backend-missing stubs instead (see [Customize
+extraction hard-fails on a missing backend: `require_extractors` is called
+with the suffixes actually discovered (not the blanket
+`EXTRACTABLE_EXTENSIONS`), so it raises a guidance `RuntimeError` (exit code
+1, `error: PDF extraction needs the 'pdf' extra:\n  uv pip install -e
+'.[pdf]'` on stderr) only when a discovered file actually needs `pypdf` — a
+caption-only tree with zero PDFs succeeds even without it.
+`index`/`query` never hard-fail this way; a PDF degrades to a
+backend-missing stub instead (see [Customize
 indexing](../how-to/customize-indexing.md#pdf-auto-indexing)).
 
-Text-mode output is one line per PDF:
+Text-mode output is one line per file — "pages" for a PDF, "sections" for a
+caption file (the manifest field itself is always `pages`, regardless of
+format):
 
 ```
 docs/paper.pdf -> .agentic-retrieval/extracted/docs/paper.pdf.md (12 pages, 34521 chars)
 docs/scan.pdf: stub (no-text-layer)
+media/talk.srt -> .agentic-retrieval/extracted/media/talk.srt.md (6 sections, 8120 chars)
 ```
 
 `--json` emits `{"root": "<path>", "files": [{"source", "sidecar",
 "status", "reason", "pages", "chars"}, ...], "pruned": <int>}`. Exit code
-`0` on success even if some PDFs produced stubs (a stub is still a valid,
+`0` on success even if some files produced stubs (a stub is still a valid,
 searchable sidecar) — non-zero exit is reserved for the missing-`pdf`-extra
 preflight failure.
 
 ## `sidecar`
 
-Inspect or author PDF/media sidecar transcripts without touching pypdf —
-the no-install alternative to `extract` for PDFs, and the **only**
-indexing path for agent-only media (`.docx`, `.pptx`, `.xlsx`, images),
-which have no machine extractor at all. Unlike `extract`, `sidecar` never
-imports/requires `pypdf` on either mode, so it works identically whether or
-not the `pdf` extra is installed.
+Inspect or author sidecar transcripts for any media tier without touching
+pypdf — the no-install alternative to `extract` for PDFs, and the **only**
+indexing path for agent-only media (`.docx`, `.pptx`, `.xlsx`, images) and
+agent-orchestrated media (`.mp4`, `.mov`, `.mkv`, `.webm`, `.mp3`, `.m4a`,
+`.wav`, `.flac`), neither of which has a machine extractor at all. Unlike
+`extract`, `sidecar` never imports/requires `pypdf` on either mode, so it
+works identically whether or not the `pdf` extra is installed, and never
+reads an audio/video source's bytes (see [extractors reference: stat-only
+identity](api/extractors.md#stat-only-identity-for-tier-3-audiovideo)).
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root |
 | `--json` | off | Emit JSON instead of text |
-| `--list` | — | Report every discovered PDF/media file's sidecar state (mutually exclusive with `--register`, one required) |
+| `--list` | — | Report every discovered media file's sidecar state (mutually exclusive with `--register`, one required) |
 | `--register SOURCE` | — | Register an agent-authored transcript as `SOURCE`'s sidecar (requires `--transcript`; mutually exclusive with `--list`, one required) |
 | `--transcript PATH\|-` | required with `--register` | Path to the transcript file, or `-` for stdin |
 
 ### `--list`
 
-Reports every PDF/media file `discover_files` would surface, one state per
+Reports every media file `discover_files` would surface, one state per
 file: `missing` (no manifest entry yet), `outdated` (source changed since
 the entry was written), `agent-authored` (registered via `--register`),
-`stub` (a placeholder, e.g. `backend-missing` for a PDF or `agent-only` for
-media with no machine extractor), or `ok` (a fresh pypdf transcript,
-PDF-only). Text mode: one line per file, e.g.
+`stub` (a placeholder — `backend-missing` for a PDF, `no-cues`/`malformed`
+for a caption file, `agent-only` for docx/pptx/xlsx/images, or
+`agent-orchestrated` for audio/video), or `ok` (a fresh machine-extracted
+transcript — pypdf for a PDF, the stdlib converter for a caption file).
+Text mode: one line per file, e.g.
 
 ```
 docs/paper.pdf: stub (backend-missing) -> needs transcript
 docs/spec.pdf: agent-authored (4 pages)
 img/diagram.png: stub (agent-only) -> needs transcript
+media/recording.mp4: stub (agent-orchestrated) -> needs transcript
 ```
+
+A media-heavy corpus can produce a long wall of stubs in text mode; use
+`--json` and filter (e.g. `jq '.files[] | select(.state != "stub")'`)
+rather than scrolling past them.
 
 `--json` emits `{"root", "backend_available", "files": [{"rel", "state",
 "sidecar", "status", "reason", "pages", "authored_at"}, ...]}`.
@@ -252,15 +269,17 @@ img/diagram.png: stub (agent-only) -> needs transcript
 Writes `SOURCE`'s sidecar from a hand-authored transcript — the recovery
 path when an agent has read the PDF (or docx/pptx/xlsx/image) itself (e.g.
 via its own `Read` tool, or vision for an image) instead of installing
-`pypdf`. See the `retrieval` skill's "Without the `pdf` extra: author the
-transcript yourself" section for the full agent workflow (page-heading
-format — optional for page-less formats, when to use this, lifecycle).
-Prints a `reindex to pick up this sidecar` hint; also warns on stderr if
-`SOURCE` isn't discoverable by the default loader, or if the transcript has
-no `## Page N` headings (page breadcrumbs will be absent from search-hit
-context — harmless for a page-less format). Missing `--transcript` is an
-argument-parsing error (exit code 2, mirroring argparse's own
-required-argument handling).
+`pypdf`, **and** the only path for audio/video, where an agent orchestrates
+an ASR tool via Bash and registers its output the same way. See the
+`retrieval` skill's "Without the `pdf` extra: author the transcript
+yourself" and "Audio and video: orchestrate an ASR tool, then register"
+sections for the full agent workflows (heading format, when to use this,
+lifecycle). Prints a `reindex to pick up this sidecar` hint; also warns on
+stderr if `SOURCE` isn't discoverable by the default loader, or if the
+transcript has no `## Page N` / `## [HH:MM:SS] ...` headings (page/section
+breadcrumbs will be absent from search-hit context — harmless for a
+heading-less format). Missing `--transcript` is an argument-parsing error
+(exit code 2, mirroring argparse's own required-argument handling).
 
 ## Exit codes
 

@@ -119,27 +119,46 @@ warning below now applies only to overrides.
     cache dirname is fair game for re-indexing. Point `RETRIEVAL_INDEX_DIR`
     outside the project root instead.
 
-## PDF sidecars + extraction manifest live under the project root
+## Media sidecars + extraction manifest live under the project root
 
 `retrieval.extractors` writes sidecar transcripts and their manifest for
-every `extractors.EXTRACTABLE_EXTENSIONS` file (PDFs, plus agent-only media
-— `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`)
-under `<project-root>/.agentic-retrieval/extracted/` — deliberately
-**always** under the indexed root, even when `RETRIEVAL_INDEX_DIR` redirects
-the retriever caches described above to a shared external directory. A
-sidecar is a citation target a coding agent `Read()`s by project-relative
-path (`docs/paper.pdf` indexes as
+every `extractors.EXTRACTABLE_EXTENSIONS` file — three tiers: PDFs and
+caption files (`.srt`, `.vtt`), agent-only media (`.docx`, `.pptx`, `.xlsx`,
+`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`), and agent-orchestrated audio/video
+(`.mp4`, `.mov`, `.mkv`, `.webm`, `.mp3`, `.m4a`, `.wav`, `.flac`) — under
+`<project-root>/.agentic-retrieval/extracted/` — deliberately **always**
+under the indexed root, even when `RETRIEVAL_INDEX_DIR` redirects the
+retriever caches described above to a shared external directory. A sidecar
+is a citation target a coding agent `Read()`s by project-relative path
+(`docs/paper.pdf` indexes as
 `.agentic-retrieval/extracted/docs/paper.pdf.md`), so it has to live inside
 the tree being indexed regardless of where the retriever cache itself is
 kept.
 
 The extraction cache (`.agentic-retrieval/extracted/manifest.json`) is keyed
-on each source file's SHA-256 content hash plus the extractor's own version
-string (`extractors.EXTRACTOR_VERSION`) — a content change or an extractor
-upgrade both force re-extraction; an unchanged file across repeated calls
-(e.g. `index --auto`'s multiple loader passes in one run) is a cache hit.
-See [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)
-and the [`extractors` API reference](api/extractors.md).
+on each source file's content identity (see "Source identity" below) plus
+the extractor's own version string (`extractors.extractor_version_for`) — a
+content change or an extractor upgrade both force re-extraction; an
+unchanged file across repeated calls (e.g. `index --auto`'s multiple loader
+passes in one run) is a cache hit. See [Customize
+indexing](../how-to/customize-indexing.md#pdf-auto-indexing) and the
+[`extractors` API reference](api/extractors.md).
+
+### Source identity: content hash vs. stat-only
+
+Every manifest entry carries a sibling `identity` field alongside its
+`sha256` key: `"sha256/1"` for PDFs, caption files, and agent-only media
+(a real SHA-256 of the source's bytes), or `"stat/1"` for
+agent-orchestrated audio/video only, where the `sha256` field is actually
+`sha256("stat/1|{size}|{mtime_ns}")` — computed from a single `os.stat()`
+call, never a byte read. This is deliberate: audio/video files are uncapped
+at discovery and can be arbitrarily large, so the engine never allocates a
+buffer to hash bytes it would then discard. The trade-off is a false cache
+hit if an in-place edit happens to preserve both file size and mtime
+(impossible under `"sha256/1"`); `retrieval extract --force` is the escape
+hatch when that matters. See the [`extractors` API
+reference](api/extractors.md#stat-only-identity-for-tier-3-audiovideo) for
+the full rationale.
 
 ### Agent-authored manifest entries
 

@@ -10,22 +10,29 @@
 | `exclude_globs` | `DEFAULT_EXCLUDE_GLOBS` | Filename deny-list globs (secret-looking names) |
 | `include_basenames` | `DEFAULT_INCLUDE_BASENAMES` | Extensionless basenames allowed regardless of `extensions` (e.g. add `'justfile'`) |
 | `max_bytes` | `MAX_FILE_BYTES` (1 MB) | Per-file size cap |
-| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (PDF + agent-only media) — see [PDF auto-indexing](#pdf-auto-indexing) below |
+| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (PDF, captions, agent-only media) — see [PDF auto-indexing](#pdf-auto-indexing) below. Agent-orchestrated audio/video is exempt from any size cap entirely |
 
 ## PDF auto-indexing
 
-PDFs — and a second tier of agent-only media (`.docx`, `.pptx`, `.xlsx`,
-`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) — under a project root are indexed
-automatically: `extractors.EXTRACTABLE_EXTENSIONS` (all of the above) is
-part of `DEFAULT_EXTENSIONS`, with no flag needed. Each such file is routed
-through `retrieval.extractors` for a cached, sidecar-transcript `Document`
-*before* the usual text-decode step, so it's chunked and searched as prose
-rather than being silently skipped as binary.
+PDFs and caption files (`.srt`, `.vtt`) — plus a second tier of agent-only
+media (`.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`)
+and a third, agent-orchestrated tier of audio/video (`.mp4`, `.mov`, `.mkv`,
+`.webm`, `.mp3`, `.m4a`, `.wav`, `.flac`) — under a project root are indexed
+automatically: `extractors.EXTRACTABLE_EXTENSIONS` (the union of all three
+tiers) is part of `DEFAULT_EXTENSIONS`, with no flag needed. Each such file
+is routed through `retrieval.extractors` for a cached, sidecar-transcript
+`Document` *before* the usual text-decode step, so it's chunked and
+searched as prose rather than being silently skipped as binary.
 
-- **Two size caps.** A PDF or media file is capped at `extract_max_bytes`
-  (25 MB) rather than the 1 MB `max_bytes` plain-text cap — these files are
-  typically much larger than source files, and applying the small default
-  cap would silently exclude every real-world one.
+- **Two size caps, plus an uncapped tier.** A PDF, caption file, or
+  agent-only media file is capped at `extract_max_bytes` (25 MB) rather
+  than the 1 MB `max_bytes` plain-text cap — these files are typically
+  much larger than source files, and applying the small default cap would
+  silently exclude every real-world one. Agent-orchestrated audio/video
+  has **no size cap at all**: the engine never reads these files' bytes
+  (see "Stat-only identity" below), so there's no memory-allocation reason
+  to bound their size, and a multi-hour recording is exactly the case
+  worth discovering.
 - **Sidecar location and citation contract.** Each file's extracted text is
   written once to `<project-root>/.agentic-retrieval/extracted/<rel-path>.md`
   — always under the project root, deliberately ignoring
@@ -48,6 +55,12 @@ rather than being silently skipped as binary.
   to stderr per process. `index`/`query` never hard-fail on a missing
   `pypdf` backend; only the `retrieval extract` subcommand does (see
   [Reference: CLI](../reference/cli.md)).
+- **Caption files (`.srt`/`.vtt`) — tier 1, no agent work needed.** A
+  stdlib-only converter (no `pypdf`, no extra) merges cues into
+  `[HH:MM:SS]`-prefixed paragraphs under `## [HH:MM:SS] <label>` section
+  headings, indexed exactly like a PDF's `## Page N` sections. A caption
+  file with zero cues or no recognizable `-->` cue-timing lines still
+  indexes as a non-empty stub (`no-cues`/`malformed`).
 - **Agent-only stubs (no machine extractor at all).** `.docx`, `.pptx`,
   `.xlsx`, and the image suffixes have no machine extractor — installing
   `pypdf` has no effect on them. Every such file always indexes as an
@@ -55,23 +68,39 @@ rather than being silently skipped as binary.
   indexed as agent-transcribable stubs` line prints to stderr per process.
   `retrieval sidecar --register` is the only way to index their real
   content.
+- **Agent-orchestrated stubs (audio/video — no machine extractor, and no
+  native agent-readable path either).** `.mp4`, `.mov`, `.mkv`, `.webm`,
+  `.mp3`, `.m4a`, `.wav`, `.flac` always index as an
+  `"agent-orchestrated"`-reason stub — an agent can't read these natively
+  the way it can a docx or image, so it must orchestrate an external ASR
+  tool (via Bash) and register the result. See the `retrieval` skill's
+  "Audio and video: orchestrate an ASR tool, then register" section.
+- **Stat-only identity (audio/video only).** The engine never reads a
+  video/audio source's bytes for any purpose — `ensure_sidecar`,
+  `register_sidecar`, and `sidecar --list` all compute its identity from a
+  single `os.stat()` call instead (`sha256("stat/1|{size}|{mtime_ns}")`,
+  manifest field `identity: "stat/1"`). Every other tier keeps a real
+  content hash (`identity: "sha256/1"`). See [Persistence and cache: source
+  identity](../reference/persistence-and-cache.md#source-identity-content-hash-vs-stat-only).
 - **Agent-authored transcripts (no-install alternative for PDF; the only
-  path for agent-only media).** Instead of installing `pypdf`, an agent can
-  read a PDF (or the original docx/pptx/xlsx/image) natively and
-  hand-author its transcript, then register it directly: `retrieval
-  sidecar --register <file> --transcript <file> --root <root>`. This
-  writes the same kind of sidecar as `ensure_sidecar` would, stamped
-  `extractor: agent-authored/1` instead of `pypdf-text/1`, and is a
-  **durable** sidecar — it is not silently replaced if `pypdf` later gets
-  installed (and never for agent-only media, which has no pypdf equivalent
-  to fall back to); only an explicit `retrieval extract --force` overwrites
-  a PDF's (with a warning; `extract` never touches agent-only media at
-  all). It also mixes into the corpus fingerprint on its own (via the
-  transcript's content hash), so re-registering a changed transcript over
-  an otherwise-unchanged source file still triggers a reindex. See
-  [Reference: CLI](../reference/cli.md#sidecar) and the `retrieval` skill's
-  "Without the `pdf` extra: author the transcript yourself" section for the
-  full workflow.
+  path for agent-only and agent-orchestrated media).** Instead of
+  installing `pypdf` (or running ASR for audio/video), an agent can read
+  the file natively (or run an ASR tool for audio/video) and hand-author
+  its transcript, then register it directly: `retrieval sidecar --register
+  <file> --transcript <file> --root <root>`. This writes the same kind of
+  sidecar as `ensure_sidecar` would, stamped `extractor: agent-authored/1`
+  instead of `pypdf-text/1`, and is a **durable** sidecar — it is not
+  silently replaced if `pypdf` later gets installed (and never for
+  agent-only/agent-orchestrated media, which has no machine-extraction
+  equivalent to fall back to); only an explicit `retrieval extract --force`
+  overwrites a PDF's (with a warning; `extract` never touches agent-only or
+  agent-orchestrated media at all). It also mixes into the corpus
+  fingerprint on its own (via the transcript's content hash), so
+  re-registering a changed transcript over an otherwise-unchanged source
+  file still triggers a reindex. See [Reference:
+  CLI](../reference/cli.md#sidecar) and the `retrieval` skill's "Without
+  the `pdf` extra: author the transcript yourself" and "Audio and video:
+  orchestrate an ASR tool, then register" sections for the full workflows.
 
 ## Extend, don't replace
 
@@ -103,9 +132,10 @@ etc. would then be walked and indexed.
   `id_rsa*`, `*credentials*`, `*secret*`, etc. — filename matching only, not
   content scanning)
 - Binary/undecodable files
-- Anything over 1 MB — except an extractable suffix (PDF + agent-only
-  media), capped at 25 MB instead (see [PDF auto-indexing](#pdf-auto-indexing)
-  above)
+- Anything over 1 MB — except an extractable suffix (PDF, captions,
+  agent-only media), capped at 25 MB instead, or agent-orchestrated
+  audio/video, which is uncapped entirely (see [PDF
+  auto-indexing](#pdf-auto-indexing) above)
 
 !!! warning
     The filename deny-list (`DEFAULT_EXCLUDE_GLOBS`) is a **best-effort**

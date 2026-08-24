@@ -6,6 +6,70 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.11.0 — 2026-08-24
+
+- **\[engine\] Caption files (`.srt`/`.vtt`) as tier-1 machine-extracted
+  media** — a new stdlib-only extractor (`captions/1`,
+  `CAPTIONS_EXTRACTOR_VERSION`) converts SRT/VTT cues into the sidecar
+  transcript format: adjacent cues merge into `[HH:MM:SS]`-prefixed
+  paragraphs, and a new `## [HH:MM:SS] <label>` section heading opens
+  roughly every 180s. No third-party subtitle library, no new extra.
+  `.srt`/`.vtt` are now part of `MACHINE_EXTRACTABLE_EXTENSIONS` and
+  `DEFAULT_EXTENSIONS` — discovered and indexed automatically, same as a
+  PDF, with `retrieval extract` pre-warming them too.
+- **\[engine\] Third media tier: agent-orchestrated audio/video** — new
+  `AGENT_ORCHESTRATED_EXTENSIONS` (`.mp4`, `.mov`, `.mkv`, `.webm`, `.mp3`,
+  `.m4a`, `.wav`, `.flac`), folded into `EXTRACTABLE_EXTENSIONS`. Unlike the
+  agent-only tier (docx/pptx/xlsx/images, which an agent reads/views
+  natively), an agent cannot read a video/audio file's bytes at all — it
+  must orchestrate an external ASR tool via Bash (WhisperX, whisper.cpp, or
+  `whisper`) and register the result via `retrieval sidecar --register`,
+  same mechanism as every other agent-authored sidecar. Every such file
+  indexes as an `"agent-orchestrated"`-reason stub until registered; see
+  the `retrieval` skill's new "Audio and video: orchestrate an ASR tool,
+  then register" section for the full workflow, including anti-fabrication
+  guidance specific to ASR output and the caption/video double-counting
+  pitfall.
+- **\[engine\] Stat-only source identity for tier 3** — `ensure_sidecar`,
+  `register_sidecar`, and `sidecar --list` never read an audio/video
+  source's bytes: a new shared `_source_identity` helper computes
+  `sha256("stat/1|{size}|{mtime_ns}")` from a single `os.stat()` call
+  instead for `AGENT_ORCHESTRATED_EXTENSIONS`, stored under the existing
+  `sha256` manifest key with a new sibling `identity` field (`"stat/1"` for
+  tier 3, `"sha256/1"` — a real content hash, unchanged behavior — for
+  every other tier). Audio/video is also exempted from any file-size cap at
+  discovery (`project_loader._is_eligible_file`), since the engine never
+  allocates a buffer to hash bytes it would then discard. Trade-off: an
+  in-place edit preserving both size and mtime produces a false cache hit
+  under `"stat/1"` (impossible under `"sha256/1"`); `retrieval extract
+  --force` is the escape hatch.
+- **\[engine\] Generalized unit-heading regex** — `_PAGE_HEADING_RE` is now
+  `_UNIT_HEADING_RE`, matching both `## Page N` (PDF) and `## [HH:MM:SS]
+  label` (caption/media) headings; `_truncate_at_page_boundary` is now
+  `_truncate_at_unit_boundary` and truncates a time-coded transcript at a
+  whole-section boundary, never mid-paragraph.
+- **\[engine\] `require_extractors` no longer conflates "has a machine
+  extractor" with "needs pypdf"** — it now checks the new
+  `PYPDF_EXTENSIONS` (`{".pdf"}`) instead of the broader
+  `MACHINE_EXTRACTABLE_EXTENSIONS` (which now also includes captions), so a
+  caption-only tree's `retrieval extract` succeeds without `pypdf`
+  installed. `register_extractor` gained an optional `version=` kwarg
+  (backing a new `_EXTRACTOR_VERSIONS` per-suffix map and
+  `extractor_version_for(path)`) so a non-pypdf extractor stamps its own
+  manifest `extractor_version` without bumping every other suffix's cache.
+- **\[engine\] Uncapped tier-3 discovery** — `discover_files` no longer
+  applies any size cap to `AGENT_ORCHESTRATED_EXTENSIONS` files (see stat-only
+  identity above); a 40MB `.mp4` is now discovered where a 30MB `.pdf`
+  still is not.
+
+**Upgrade note:** a corpus containing `.srt`/`.vtt`, or any
+`AGENT_ORCHESTRATED_EXTENSIONS` audio/video file, under its indexed root
+reindexes once, automatically, on the next `index`/`query` after upgrading
+— these suffixes are newly discovered and fingerprinted. A corpus with none
+of these file types fingerprints byte-identically to the pre-0.11.0 format.
+This is the same one-time fingerprint churn 0.9.0 introduced when
+agent-only media suffixes were added to discovery.
+
 ## 0.10.0 — 2026-08-21
 
 - **\[engine\] Terraform/HCL indexing** — `.tf`, `.tfvars`, and `.hcl` are
@@ -108,8 +172,10 @@ that **contains** `.docx`/`.pptx`/`.xlsx`/image files under its indexed
 root: such a corpus reindexes once, automatically, on the next
 `index`/`query` after upgrading, picking up the newly discovered files as
 `agent-only` stubs. A corpus with none of these file types is unaffected.
-Future work: extend the sidecar mechanism to audio/video — deliberately
-excluded here since agents can't yet reliably transcribe them natively.
+(Audio/video support landed in 0.11.0, below, via a third
+agent-orchestrated media tier rather than the agent-only tier this release
+introduced — an agent can read a docx or image natively, but not an mp4's
+bytes, so it needed a different mechanism.)
 
 ## 0.8.0 — 2026-08-03
 

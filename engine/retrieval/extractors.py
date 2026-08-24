@@ -40,11 +40,21 @@ extract --force`` overwrites it. See ``retrieval sidecar --list
 --register`` (``retrieval.cli``) and the ``retrieval`` skill's "Without the
 pdf extra" section.
 
-Beyond PDF, a second tier of media (``AGENT_ONLY_EXTENSIONS`` — office docs
-and images) has **no machine extractor at all**: ``ensure_sidecar`` always
-writes an ``"agent-only"`` stub for these suffixes, regardless of what's
-installed, and the ``retrieval sidecar --register`` workflow above is the
-*only* way to index their real content.
+Beyond PDF (and caption files, ``.srt``/``.vtt`` — a second stdlib-only
+machine extractor, see ``_extract_captions``), a second tier of media
+(``AGENT_ONLY_EXTENSIONS`` — office docs and images) has **no machine
+extractor at all**: ``ensure_sidecar`` always writes an ``"agent-only"``
+stub for these suffixes, regardless of what's installed, and the
+``retrieval sidecar --register`` workflow above is the *only* way to index
+their real content.
+
+A third tier (``AGENT_ORCHESTRATED_EXTENSIONS`` — audio/video) goes further
+still: an agent cannot even read these natively, so it must orchestrate an
+external tool (ASR via Bash) and register the result the same way. Because
+these files can be arbitrarily large, ``ensure_sidecar``/``register_sidecar``
+never read their bytes at all for identity purposes — see
+``_source_identity``'s stat-only ``"stat/1"`` hash for this tier, versus the
+byte-hash ``"sha256/1"`` every other tier uses.
 """
 
 import hashlib
@@ -74,40 +84,77 @@ EXTRACTOR_VERSION = "pypdf-text/1"
 #: first-class sidecar, not a stub awaiting a real extraction.
 AGENT_EXTRACTOR_VERSION = "agent-authored/1"
 
+#: Per-suffix extractor-version overrides, keyed by lowercased suffix (e.g.
+#: ``{".srt": "captions/1"}``). ``EXTRACTOR_VERSION`` remains the top-level
+#: manifest ``extractor_version`` field (a single schema-bump string for the
+#: whole manifest); this dict lets a *specific* extractor (e.g. the caption
+#: converter) stamp its own version onto its own entries without bumping
+#: every other suffix's cache. Populated by ``register_extractor``'s
+#: ``version=`` kwarg. See ``extractor_version_for``.
+_EXTRACTOR_VERSIONS: Dict[str, str] = {}
+
 #: Extractor-version values ``_is_cache_hit`` treats as fresh; membership
 #: (not equality with ``EXTRACTOR_VERSION``) so an agent-authored entry
 #: survives across ``ensure_sidecar`` calls instead of being treated as
-#: stale pypdf output.
+#: stale pypdf output. Rebuilt (not reassigned) whenever ``_EXTRACTOR_VERSIONS``
+#: changes, via ``register_extractor``.
 _ACCEPTED_EXTRACTOR_VERSIONS = frozenset({EXTRACTOR_VERSION, AGENT_EXTRACTOR_VERSION})
 
 #: ``manifest["entries"][rel]["authored_by"]`` value for an agent-registered
 #: sidecar (see ``register_sidecar``).
 AUTHORED_BY_AGENT = "agent"
 
-#: Suffixes with a registered machine extractor (currently: pypdf for
-#: ``.pdf``). Used where "can a machine attempt real extraction" is the
-#: question (``require_extractors`` preflight, ``cli._discover_pdfs`` /
-#: ``_cmd_extract``'s extraction loop) — never for discovery eligibility,
-#: which is ``EXTRACTABLE_EXTENSIONS`` (below).
-MACHINE_EXTRACTABLE_EXTENSIONS = frozenset({".pdf"})
+#: Suffixes whose machine extractor needs the optional ``pypdf`` backend
+#: (currently just ``.pdf``). Distinct from ``MACHINE_EXTRACTABLE_EXTENSIONS``
+#: (below): the latter is "has *some* registered extractor" (pypdf-backed
+#: *or* stdlib-only, e.g. captions), while this set is specifically "needs a
+#: backend install to produce real output" — the question ``require_extractors``
+#: and ``ensure_sidecar``'s backend-missing-stub branch actually need to ask.
+PYPDF_EXTENSIONS = frozenset({".pdf"})
+
+#: Suffixes with a registered machine extractor (pypdf-backed ``.pdf``, and
+#: stdlib-only ones like caption files — see ``PYPDF_EXTENSIONS`` for the
+#: subset needing a backend). Used where "can a machine attempt real
+#: extraction" is the question (``require_extractors`` preflight,
+#: ``cli._discover_machine_extractable`` / ``_cmd_extract``'s extraction
+#: loop) — never for discovery eligibility, which is
+#: ``EXTRACTABLE_EXTENSIONS`` (below).
+MACHINE_EXTRACTABLE_EXTENSIONS = frozenset({".pdf", ".srt", ".vtt"})
 
 #: Suffixes with **no** machine extractor at all: office documents and
 #: images a coding agent can read/view natively (Read tool / vision) but
 #: this module can never parse itself. ``ensure_sidecar`` always writes an
 #: ``"agent-only"`` stub for these — the sidecar-register workflow is the
-#: only indexing path. Audio/video are deliberately excluded: agents can't
-#: yet reliably transcribe them natively (see the changelog's future-work
-#: note).
+#: only indexing path. See ``AGENT_ORCHESTRATED_EXTENSIONS`` below for the
+#: third tier (audio/video), which is NOT this: those need an external tool
+#: the agent runs, not something the agent reads/views itself.
 AGENT_ONLY_EXTENSIONS = frozenset(
     {".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
 )
 
-#: File suffixes this module can produce a sidecar for (PDF + agent-only
-#: media) — either via a machine extractor or via ``register_sidecar``.
-#: ``project_loader`` discovery, ``register_sidecar``'s suffix validation,
-#: and ``persistence.compute_fingerprint`` all key off this union, so a new
-#: agent-only suffix added here is discovered/fingerprinted for free.
-EXTRACTABLE_EXTENSIONS = MACHINE_EXTRACTABLE_EXTENSIONS | AGENT_ONLY_EXTENSIONS
+#: Third media tier: audio/video suffixes with no machine extractor AND no
+#: native agent-readable path either (unlike ``AGENT_ONLY_EXTENSIONS`` — an
+#: agent can ``Read()``/view a docx or png directly, but it cannot "read"
+#: an mp4's bytes and produce a transcript). The defining property: an agent
+#: indexes these by *orchestrating an external tool* (ASR via Bash — see
+#: ``_MSG_AGENT_ORCHESTRATED``), never by reading the source natively.
+#: ``ensure_sidecar`` never reads these files' bytes at all (see
+#: ``_source_identity``) — only ``os.stat``, deliberately, since these files
+#: can be arbitrarily large and the engine has no business allocating a
+#: multi-GB buffer just to compute a hash it then discards.
+AGENT_ORCHESTRATED_EXTENSIONS = frozenset(
+    {".mp4", ".mov", ".mkv", ".webm", ".mp3", ".m4a", ".wav", ".flac"}
+)
+
+#: File suffixes this module can produce a sidecar for (PDF/captions +
+#: agent-only + agent-orchestrated media) — either via a machine extractor
+#: or via ``register_sidecar``. ``project_loader`` discovery,
+#: ``register_sidecar``'s suffix validation, and
+#: ``persistence.compute_fingerprint`` all key off this union, so a new
+#: suffix added to any tier is discovered/fingerprinted for free.
+EXTRACTABLE_EXTENSIONS = (
+    MACHINE_EXTRACTABLE_EXTENSIONS | AGENT_ONLY_EXTENSIONS | AGENT_ORCHESTRATED_EXTENSIONS
+)
 
 #: Raw source-file byte cap applied at discovery time for extractable
 #: suffixes (see ``project_loader.discover_files``'s ``extract_max_bytes``).
@@ -115,7 +162,7 @@ EXTRACT_MAX_BYTES = 25_000_000
 
 #: Post-extraction transcript character budget; a longer transcript is
 #: truncated at the last whole-page boundary under this limit (see
-#: ``_truncate_at_page_boundary``).
+#: ``_truncate_at_unit_boundary``).
 MAX_TRANSCRIPT_CHARS = 1_000_000
 
 #: Duplicates ``retrieval.persistence.CACHE_DIRNAME``'s value — this module
@@ -131,10 +178,16 @@ _PAGE_MEMORY_GUARD_BYTES = 50_000_000
 _DEHYPHEN_RE = re.compile(r"(\w)-\n(\w)")
 _WS_COLLAPSE_RE = re.compile(r"[ \t]{2,}")
 
-#: Matches a ``## Page N`` heading line, used both to count pages in an
-#: agent-authored transcript and to find whole-page boundaries for
-#: ``register_sidecar``'s oversized-transcript truncation.
-_PAGE_HEADING_RE = re.compile(r"^## Page \d+\s*$", re.MULTILINE)
+#: Matches a section-heading line in a sidecar transcript — either the PDF
+#: convention (``## Page N``) or the time-coded convention used by caption/
+#: media transcripts (``## [HH:MM:SS] label``). Used both to count units
+#: (pages, or timestamped sections) in an agent-authored transcript and to
+#: find whole-unit boundaries for ``register_sidecar``'s oversized-transcript
+#: truncation. Deliberately narrow to these two shapes — a generic ``## ...``
+#: match would treat prose subheadings as unit boundaries.
+_UNIT_HEADING_RE = re.compile(
+    r"^## (?:Page \d+|\[\d{2}:\d{2}:\d{2}\][^\n]*)\s*$", re.MULTILINE
+)
 
 #: Strips a leading run of ``<!-- ... -->`` comment lines from an
 #: agent-authored transcript before rendering — ``_render_sidecar`` always
@@ -183,6 +236,11 @@ _WARNED = False
 #: ``_WARNED``).
 _WARNED_AGENT_ONLY = False
 
+#: Set once a tier-3 agent-orchestrated (audio/video) file has been
+#: stubbed, so its distinct "run ASR, then register" note prints at most
+#: once per process (mirrors ``_WARNED_AGENT_ONLY``).
+_WARNED_AGENT_ORCHESTRATED = False
+
 _MSG_ENCRYPTED = (
     "This PDF is password-protected and could not be decrypted with an "
     "empty password, so no text could be extracted."
@@ -214,11 +272,37 @@ _MSG_AGENT_ONLY = (
     "transcript directly via `retrieval sidecar --register <file> "
     "--transcript <transcript> --root <root>`."
 )
+_MSG_AGENT_ORCHESTRATED = (
+    "This audio/video file has no machine extractor, and a coding agent "
+    "cannot read it natively either (unlike documents/images). Run an ASR "
+    "tool via Bash (e.g. WhisperX, whisper.cpp, or whisper) to transcribe "
+    "it, then register the result directly via `retrieval sidecar "
+    "--register <file> --transcript <transcript> --root <root>`. If no ASR "
+    "tool is available, leave this stub as-is — it is an honest state, not "
+    "an error."
+)
 
 
-def register_extractor(suffix: str, fn: Callable[[bytes], Extraction]) -> None:
-    """Register *fn* as the extractor for files with *suffix* (e.g. ``.pdf``)."""
+def register_extractor(
+    suffix: str, fn: Callable[[bytes], Extraction], *, version: str | None = None
+) -> None:
+    """Register *fn* as the extractor for files with *suffix* (e.g. ``.pdf``).
+
+    *version*, when given, is recorded in ``_EXTRACTOR_VERSIONS`` and folded
+    into ``_ACCEPTED_EXTRACTOR_VERSIONS`` — a non-pypdf extractor (e.g. the
+    caption converter, ``captions/1``) stamps its own manifest-entry
+    ``extractor_version`` via ``extractor_version_for`` instead of the
+    top-level ``EXTRACTOR_VERSION`` (which stays pypdf's). Omitting *version*
+    (the ``.pdf`` registration below) leaves ``EXTRACTOR_VERSION`` as that
+    suffix's version, unchanged from prior releases.
+    """
+    global _ACCEPTED_EXTRACTOR_VERSIONS
     _EXTRACTORS[suffix.lower()] = fn
+    if version is not None:
+        _EXTRACTOR_VERSIONS[suffix.lower()] = version
+        _ACCEPTED_EXTRACTOR_VERSIONS = frozenset(
+            {EXTRACTOR_VERSION, AGENT_EXTRACTOR_VERSION} | set(_EXTRACTOR_VERSIONS.values())
+        )
 
 
 def extractor_for(path: "os.PathLike[str] | str") -> Callable[[bytes], Extraction] | None:
@@ -226,18 +310,31 @@ def extractor_for(path: "os.PathLike[str] | str") -> Callable[[bytes], Extractio
     return _EXTRACTORS.get(Path(path).suffix.lower())
 
 
-def require_extractors(extensions: Iterable[str]) -> None:
-    """Raise a guidance ``RuntimeError`` if *extensions* needs a backend that
-    isn't installed (mirrors ``retrieval.retrievers``' guidance-``RuntimeError``
-    convention: ``RuntimeError``, not ``ImportError``, two-line message).
+def extractor_version_for(path: "os.PathLike[str] | str") -> str:
+    """Return the manifest ``extractor_version`` string to stamp for
+    *path*'s suffix: its ``_EXTRACTOR_VERSIONS`` override if one was
+    registered (e.g. ``captions/1`` for ``.srt``/``.vtt``), else the
+    top-level ``EXTRACTOR_VERSION`` (pypdf's, unchanged default)."""
+    return _EXTRACTOR_VERSIONS.get(Path(path).suffix.lower(), EXTRACTOR_VERSION)
 
-    Only checks extension membership in ``MACHINE_EXTRACTABLE_EXTENSIONS``
-    (currently ``.pdf``) — never probes import success for
-    eligibility/discovery, only for this explicit preflight call.
-    ``AGENT_ONLY_EXTENSIONS`` never needs a backend (there isn't one), so
-    they're excluded from this guard.
+
+def require_extractors(extensions: Iterable[str]) -> None:
+    """Raise a guidance ``RuntimeError`` if *extensions* needs the ``pypdf``
+    backend and it isn't installed (mirrors ``retrieval.retrievers``'
+    guidance-``RuntimeError`` convention: ``RuntimeError``, not
+    ``ImportError``, two-line message).
+
+    Only checks extension membership in ``PYPDF_EXTENSIONS`` (currently
+    ``.pdf``) — never probes import success for eligibility/discovery, only
+    for this explicit preflight call. Every other extractable suffix
+    (``AGENT_ONLY_EXTENSIONS``, stdlib-only machine extractors like
+    captions, ``AGENT_ORCHESTRATED_EXTENSIONS``) never needs a backend, so
+    they're excluded from this guard — this is a deliberate split from the
+    former "any ``MACHINE_EXTRACTABLE_EXTENSIONS`` member needs pypdf"
+    conflation, which would have misreported a caption-only tree as needing
+    ``pypdf``.
     """
-    if not any(ext.lower() in MACHINE_EXTRACTABLE_EXTENSIONS for ext in extensions):
+    if not any(ext.lower() in PYPDF_EXTENSIONS for ext in extensions):
         return
     try:
         import pypdf  # noqa: F401
@@ -371,6 +468,18 @@ def _warn_agent_only() -> None:
             file=sys.stderr,
         )
         _WARNED_AGENT_ONLY = True
+
+
+def _warn_agent_orchestrated() -> None:
+    global _WARNED_AGENT_ORCHESTRATED
+    if not _WARNED_AGENT_ORCHESTRATED:
+        print(
+            "warning: audio/video files were indexed as agent-orchestrated "
+            "stubs (run ASR via Bash, then register the transcript via "
+            "`retrieval sidecar --register`)",
+            file=sys.stderr,
+        )
+        _WARNED_AGENT_ORCHESTRATED = True
 
 
 def _stub(reason: str, message: str) -> Extraction:
@@ -509,7 +618,7 @@ def _reflow_page(lines: List[str]) -> str:
     return "\n\n".join(cleaned)
 
 
-def _truncate_at_page_boundary(page_bodies: List[str]) -> Tuple[str, bool]:
+def _truncate_at_unit_boundary(page_bodies: List[str]) -> Tuple[str, bool]:
     """Concatenate *page_bodies*, cutting at the last whole-page boundary
     that keeps the transcript under ``MAX_TRANSCRIPT_CHARS``, then append a
     truncation marker paragraph."""
@@ -569,7 +678,7 @@ def _extract_pdf(data: bytes) -> Extraction:
         transcript = "\n\n".join(page_bodies)
         truncated = False
         if len(transcript) > MAX_TRANSCRIPT_CHARS:
-            transcript, truncated = _truncate_at_page_boundary(page_bodies)
+            transcript, truncated = _truncate_at_unit_boundary(page_bodies)
 
         return Extraction(
             text=transcript, status="ok", reason="", pages=n_pages, truncated=truncated
@@ -579,6 +688,228 @@ def _extract_pdf(data: bytes) -> Extraction:
 
 
 register_extractor(".pdf", _extract_pdf)
+
+
+#: Extractor-version string for ``_extract_captions`` (``.srt``/``.vtt``),
+#: stamped onto its manifest entries via ``register_extractor``'s
+#: ``version=`` kwarg (see ``extractor_version_for``) — distinct from
+#: pypdf's ``EXTRACTOR_VERSION`` so bumping one never invalidates the
+#: other's cache.
+CAPTIONS_EXTRACTOR_VERSION = "captions/1"
+
+_MSG_NO_CUES = (
+    "This caption file contains no cues (timed text), so there is no "
+    "transcript to extract."
+)
+_MSG_MALFORMED_CAPTIONS = (
+    "This caption file could not be parsed as SRT or VTT (no cue-timing "
+    "'-->' lines were found)."
+)
+
+#: Matches an SRT/VTT cue-timing line's two timestamps, e.g.
+#: ``00:00:01,000 --> 00:00:04,000`` or ``00:04.000 --> 00:07.500``. A
+#: ``search`` (not ``match``/anchor), so trailing VTT cue settings
+#: (``align:middle line:90%``) after the second timestamp are ignored for
+#: free — they're just text past where the regex stops looking.
+_CUE_TIME_RE = re.compile(
+    r"(\d{2}:\d{2}:\d{2}[.,]\d{3}|\d{2}:\d{2}[.,]\d{3})\s*-->\s*"
+    r"(\d{2}:\d{2}:\d{2}[.,]\d{3}|\d{2}:\d{2}[.,]\d{3})"
+)
+#: A VTT ``<v Speaker>`` or ``<v.loud Speaker>`` voice tag — captured and
+#: turned into a ``Speaker: `` prefix (see ``_clean_cue_text``) before the
+#: generic tag-strip below discards it like any other markup tag.
+_VOICE_TAG_RE = re.compile(r"<v(?:\.[^ >]*)?\s+([^>]+)>")
+#: Any other inline markup tag (``<b>``, ``<i>``, ``<00:00:01.500>`` karaoke
+#: timestamps, etc.) — stripped with no replacement.
+_TAG_RE = re.compile(r"<[^>]*>")
+#: An SSA/ASS-style override tag (``{\an5}``) sometimes present in SRT
+#: cues from tools that round-trip through ASS — stripped with no
+#: replacement, same as an HTML-ish tag.
+_ASS_OVERRIDE_RE = re.compile(r"\{\\an?\d+\}", re.IGNORECASE)
+
+#: Every ~180s of section content opens a new ``## [HH:MM:SS] <label>``
+#: heading (heading density sets chunk size — see ``_UNIT_HEADING_RE`` and
+#: ``chunker.py``'s heading-change-forces-emit rule); chosen to land in the
+#: 1-5 minute topical-segment range the research report recommends (§E).
+_CAPTION_SECTION_SECONDS = 180.0
+#: A caption paragraph closes (a new timestamp-prefixed paragraph starts)
+#: once either the running text exceeds this many characters or the gap
+#: since the previous cue's end exceeds 2 seconds (a natural pause).
+_CAPTION_PARAGRAPH_CHARS = 400
+_CAPTION_PARAGRAPH_GAP_SECONDS = 2.0
+
+
+def _parse_cue_timestamp(raw: str) -> float:
+    """Parse an SRT/VTT cue timestamp (``HH:MM:SS,mmm``/``HH:MM:SS.mmm``/
+    ``MM:SS.mmm``) into absolute seconds."""
+    parts = raw.strip().replace(",", ".").split(":")
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+    else:
+        hours = "0"
+        minutes, seconds = parts
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _format_cue_timestamp(seconds: float) -> str:
+    """Render absolute *seconds* as a zero-padded ``HH:MM:SS`` prefix,
+    matching the PDF sidecar's ``## Page N`` heading slot (see the research
+    report §E: sub-second precision is dropped — paragraph-level timestamps
+    don't need it, and it would just be truncated by the chunker anyway)."""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _decode_caption_bytes(data: bytes) -> str:
+    """Decode caption *data* as UTF-8 (stripping a BOM if present), falling
+    back to Latin-1 (which never raises ``UnicodeDecodeError`` — every byte
+    value is a valid Latin-1 code point) for the occasional cp1252/Latin-1
+    caption file in the wild. Caption extraction must never raise on bad
+    encoding; a garbled-but-present transcript beats a silent crash."""
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
+def _clean_cue_text(lines: List[str]) -> str:
+    """Join a cue's body *lines* into one line of plain text: strip ASS
+    override tags and markup tags, promote a ``<v Speaker>`` voice tag into
+    a ``Speaker: `` prefix (checked before the generic tag strip, since it
+    needs the tag's captured name before discarding it), and collapse
+    whitespace."""
+    cleaned: List[str] = []
+    for line in lines:
+        line = _ASS_OVERRIDE_RE.sub("", line)
+        voice_match = _VOICE_TAG_RE.search(line)
+        if voice_match:
+            speaker = _TAG_RE.sub("", voice_match.group(1)).strip()
+            line = _VOICE_TAG_RE.sub("", line)
+            line = _TAG_RE.sub("", line).strip()
+            line = f"{speaker}: {line}" if line else f"{speaker}:"
+        else:
+            line = _TAG_RE.sub("", line)
+        line = _WS_COLLAPSE_RE.sub(" ", line).strip()
+        if line:
+            cleaned.append(line)
+    return " ".join(cleaned)
+
+
+def _iter_caption_cues(text: str) -> Tuple[List[Tuple[float, float, str]], bool]:
+    """Tokenize *text* (already-decoded SRT or VTT content) into
+    ``(start_seconds, end_seconds, cue_text)`` tuples, plus whether any
+    cue-timing line was seen at all (distinguishes a malformed file from
+    one that parsed fine but genuinely has zero cues).
+
+    One tokenizer for both formats: split on blank lines into blocks (via
+    the same ``_split_blocks`` the PDF reflow pipeline uses), then keep
+    only blocks containing a ``-->`` line — this alone is enough to skip
+    the ``WEBVTT`` header, ``NOTE``/``STYLE``/``REGION`` blocks, and a
+    leading numeric SRT index line (none of those lines contain ``-->``,
+    and any index/identifier line preceding the timing line within a cue's
+    own block is simply not part of the body captured after it).
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    cues: List[Tuple[float, float, str]] = []
+    saw_timing_line = False
+    for block in _split_blocks(lines):
+        timing_idx = None
+        for i, line in enumerate(block):
+            if "-->" in line:
+                timing_idx = i
+                break
+        if timing_idx is None:
+            continue
+        match = _CUE_TIME_RE.search(block[timing_idx])
+        if not match:
+            continue
+        saw_timing_line = True
+        start = _parse_cue_timestamp(match.group(1))
+        end = _parse_cue_timestamp(match.group(2))
+        cue_text = _clean_cue_text(block[timing_idx + 1:])
+        if not cue_text:
+            continue
+        cues.append((start, end, cue_text))
+    return cues, saw_timing_line
+
+
+def _extract_captions(data: bytes) -> Extraction:
+    """Convert an SRT or VTT caption file's cues into the sidecar transcript
+    format (stdlib-only, no third-party subtitle library): adjacent cues
+    merge into ``[HH:MM:SS]``-prefixed paragraphs, and a new
+    ``## [HH:MM:SS] <label>`` section heading opens roughly every
+    ``_CAPTION_SECTION_SECONDS``. *label* is only a locator — the first ~8
+    words of the section's first cue — never a real topic summary; captions
+    carry no semantic labels the way an ASR-and-summarize pipeline might
+    produce.
+    """
+    text = _decode_caption_bytes(data)
+    cues, saw_timing_line = _iter_caption_cues(text)
+    if not cues:
+        if saw_timing_line:
+            return _stub("no-cues", _MSG_NO_CUES)
+        return _stub("malformed", _MSG_MALFORMED_CAPTIONS)
+
+    # Drop consecutive-duplicate cues (identical text back-to-back, common
+    # in auto-generated captions with overlapping/repeated cue windows).
+    deduped: List[Tuple[float, float, str]] = []
+    for cue in cues:
+        if deduped and deduped[-1][2] == cue[2]:
+            continue
+        deduped.append(cue)
+
+    # Merge cues into timestamp-prefixed paragraphs.
+    paragraphs: List[Tuple[float, str]] = []
+    para_start = para_end = None
+    para_parts: List[str] = []
+    for start, end, cue_text in deduped:
+        if para_start is None:
+            para_start, para_end, para_parts = start, end, [cue_text]
+            continue
+        gap = start - para_end
+        joined_len = sum(len(p) for p in para_parts) + len(cue_text)
+        if gap > _CAPTION_PARAGRAPH_GAP_SECONDS or joined_len > _CAPTION_PARAGRAPH_CHARS:
+            paragraphs.append((para_start, " ".join(para_parts)))
+            para_start, para_end, para_parts = start, end, [cue_text]
+        else:
+            para_parts.append(cue_text)
+            para_end = end
+    if para_parts:
+        paragraphs.append((para_start, " ".join(para_parts)))
+
+    # Group paragraphs into ~180s sections; always at least one.
+    sections: List[List[Tuple[float, str]]] = []
+    section_opened_at = None
+    for start, para_text in paragraphs:
+        if section_opened_at is None or (start - section_opened_at) >= _CAPTION_SECTION_SECONDS:
+            sections.append([])
+            section_opened_at = start
+        sections[-1].append((start, para_text))
+
+    section_bodies = []
+    for section in sections:
+        first_start, first_text = section[0]
+        label = " ".join(first_text.split()[:8])
+        heading = f"## [{_format_cue_timestamp(first_start)}] {label}"
+        body = "\n\n".join(
+            f"[{_format_cue_timestamp(start)}] {para_text}" for start, para_text in section
+        )
+        section_bodies.append(f"{heading}\n\n{body}")
+
+    transcript = "\n\n".join(section_bodies)
+    truncated = False
+    if len(transcript) > MAX_TRANSCRIPT_CHARS:
+        transcript, truncated = _truncate_at_unit_boundary(section_bodies)
+
+    return Extraction(
+        text=transcript, status="ok", reason="", pages=len(sections), truncated=truncated
+    )
+
+
+register_extractor(".srt", _extract_captions, version=CAPTIONS_EXTRACTOR_VERSION)
+register_extractor(".vtt", _extract_captions, version=CAPTIONS_EXTRACTOR_VERSION)
 
 
 def _engine_version() -> str:
@@ -619,6 +950,65 @@ def _is_cache_hit(
     return True
 
 
+#: Manifest ``entries[rel]["identity"]`` value for the common case: the
+#: sibling ``sha256`` field is a real SHA-256 content hash of the source
+#: file's bytes.
+IDENTITY_SHA256 = "sha256/1"
+
+#: Manifest ``entries[rel]["identity"]`` value for
+#: ``AGENT_ORCHESTRATED_EXTENSIONS`` (tier-3 audio/video) only: the sibling
+#: ``sha256`` field is *not* a content hash — it's
+#: ``sha256("stat/1|{st_size}|{st_mtime_ns}")``, computed from a single
+#: ``os.stat()`` call, never a byte read. Stored under the existing
+#: ``sha256`` key (not a new key) so ``_is_cache_hit``'s comparison logic
+#: needs no change; ``identity`` is purely informational, distinguishing
+#: "this looks like a hash but isn't one" for a reader of the manifest.
+IDENTITY_STAT = "stat/1"
+
+
+def _source_identity(
+    path: Path, *, stat: "os.stat_result | None" = None, data: bytes | None = None
+) -> Tuple[str, int, str]:
+    """Return ``(digest, source_bytes, identity)`` for *path* — the single
+    helper every read of a source file's identity goes through (replacing
+    three formerly-independent ``read_bytes()`` call sites in
+    ``ensure_sidecar``, ``register_sidecar``, and ``_entry_state``).
+
+    For every tier except ``AGENT_ORCHESTRATED_EXTENSIONS`` (tier-3
+    audio/video), *digest* is a real SHA-256 of the file's bytes (identity
+    ``IDENTITY_SHA256``) — *data*, when given, reuses bytes the caller
+    already read (``ensure_sidecar`` needs the raw bytes for extraction
+    anyway; passing them here avoids a second read) rather than re-reading.
+
+    For tier-3, *digest* is instead ``sha256("stat/1|{st_size}|{st_mtime_ns}")``
+    (identity ``IDENTITY_STAT``) computed from an ``os.stat()`` call ALONE —
+    this function never calls ``path.read_bytes()`` for a tier-3 suffix,
+    full stop, matching ``AGENT_ORCHESTRATED_EXTENSIONS``'s defining
+    property that the engine never reads these files' bytes. *stat*, when
+    given, reuses the caller's own already-taken ``os.stat()`` result (see
+    ``ensure_sidecar``, which stats *source_path* early for its process-memo
+    key) instead of calling it again — one syscall total, and the same
+    read-then-use-that-same-read TOCTOU discipline the byte-hash path has.
+
+    Trade-off (tier-3 only, documented per the research report's Open
+    Question): an in-place edit that happens to preserve both file size and
+    mtime produces a false cache hit under ``"stat/1"`` — impossible under
+    ``"sha256/1"``, which would catch any content change. ``retrieval
+    extract --force`` / ``ensure_sidecar(..., force=True)`` is the escape
+    hatch when that matters (e.g. after editing a video file in place with a
+    tool that preserves its mtime).
+    """
+    if path.suffix.lower() in AGENT_ORCHESTRATED_EXTENSIONS:
+        st = stat if stat is not None else path.stat()
+        digest = hashlib.sha256(
+            f"stat/1|{st.st_size}|{st.st_mtime_ns}".encode("ascii")
+        ).hexdigest()
+        return digest, st.st_size, IDENTITY_STAT
+    if data is None:
+        data = path.read_bytes()
+    return hashlib.sha256(data).hexdigest(), len(data), IDENTITY_SHA256
+
+
 def ensure_sidecar(
     root: "os.PathLike[str] | str", source: "os.PathLike[str] | str", *, force: bool = False
 ) -> Sidecar:
@@ -649,8 +1039,16 @@ def ensure_sidecar(
     entries = manifest.setdefault("entries", {})
     entry = entries.get(rel)
 
-    data = source_path.read_bytes()
-    sha256 = hashlib.sha256(data).hexdigest()
+    suffix = source_path.suffix.lower()
+    is_tier3 = suffix in AGENT_ORCHESTRATED_EXTENSIONS
+    # Tier-3 (audio/video): never read the source's bytes — _source_identity
+    # stat-hashes it instead. `data` stays empty and is never handed to an
+    # extractor below (tier-3 has none registered, so that branch is never
+    # taken for these suffixes).
+    data = b"" if is_tier3 else source_path.read_bytes()
+    sha256, source_bytes, identity = _source_identity(
+        source_path, stat=stat, data=None if is_tier3 else data
+    )
 
     if _is_cache_hit(entry, sha256, sidecar_path, force):
         text = sidecar_path.read_text(encoding="utf-8")
@@ -663,19 +1061,30 @@ def ensure_sidecar(
 
     extractor = extractor_for(source_path)
     if extractor is None:
-        # Agent-only suffix (e.g. .docx, .png): no machine extractor
-        # exists at all, so this is never a "backend missing" situation
-        # and must never look like one — needs_reextraction/_is_cache_hit
-        # key on the literal "backend-missing" reason to self-heal a stub
-        # once pypdf becomes available, and an agent-only stub must never
-        # be caught by that (it would loop forever re-stubbing a docx).
-        _warn_agent_only()
-        extraction = _stub("agent-only", _MSG_AGENT_ONLY)
-    elif backend_available():
-        extraction = extractor(data)
-    else:
+        # No machine extractor exists at all for this suffix (agent-only
+        # media, or agent-orchestrated tier-3 audio/video): never a
+        # "backend missing" situation and must never look like one —
+        # needs_reextraction/_is_cache_hit key on the literal
+        # "backend-missing" reason to self-heal a stub once pypdf becomes
+        # available, and a no-extractor stub must never be caught by that
+        # (it would loop forever re-stubbing a docx or an mp4). The two
+        # no-extractor tiers get distinct messages/reasons (never
+        # "backend-missing" for either) — see _warn_agent_only /
+        # _warn_agent_orchestrated and the anti-loop invariant above.
+        if is_tier3:
+            _warn_agent_orchestrated()
+            extraction = _stub("agent-orchestrated", _MSG_AGENT_ORCHESTRATED)
+        else:
+            _warn_agent_only()
+            extraction = _stub("agent-only", _MSG_AGENT_ONLY)
+    elif suffix in PYPDF_EXTENSIONS and not backend_available():
+        # A registered extractor exists but needs the pypdf backend, which
+        # isn't installed — distinct from the no-extractor branch above:
+        # this one DOES self-heal once pypdf becomes available.
         _warn_backend_missing()
         extraction = _stub("backend-missing", _MSG_BACKEND_MISSING)
+    else:
+        extraction = extractor(data)
 
     sidecar_text = _render_sidecar(rel, extraction)
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -683,8 +1092,9 @@ def ensure_sidecar(
 
     entries[rel] = {
         "sha256": sha256,
-        "source_bytes": len(data),
-        "extractor_version": EXTRACTOR_VERSION,
+        "source_bytes": source_bytes,
+        "identity": identity,
+        "extractor_version": extractor_version_for(source_path),
         "sidecar": sidecar_rel,
         "sidecar_bytes": len(sidecar_text.encode("utf-8")),
         "pages": extraction.pages,
@@ -708,16 +1118,17 @@ def ensure_sidecar(
 
 def _truncate_agent_transcript(text: str) -> Tuple[str, bool]:
     """Truncate an over-budget agent-authored *text* to fit
-    ``MAX_TRANSCRIPT_CHARS``, preferring a whole-page-boundary cut (reusing
-    ``_truncate_at_page_boundary``) when ``## Page N`` headings are present,
-    else a plain character slice with the same truncation marker."""
-    heading_starts = [m.start() for m in _PAGE_HEADING_RE.finditer(text)]
+    ``MAX_TRANSCRIPT_CHARS``, preferring a whole-unit-boundary cut (reusing
+    ``_truncate_at_unit_boundary``) when ``## Page N`` or ``## [HH:MM:SS] ...``
+    headings are present, else a plain character slice with the same
+    truncation marker."""
+    heading_starts = [m.start() for m in _UNIT_HEADING_RE.finditer(text)]
     if heading_starts:
         segments = []
         for i, start in enumerate(heading_starts):
             end = heading_starts[i + 1] if i + 1 < len(heading_starts) else len(text)
             segments.append(text[start:end].rstrip("\n"))
-        return _truncate_at_page_boundary(segments)
+        return _truncate_at_unit_boundary(segments)
     marker = "\n\n_[transcript truncated: exceeded extraction size budget]_"
     return text[: MAX_TRANSCRIPT_CHARS - len(marker)] + marker, True
 
@@ -767,13 +1178,14 @@ def register_sidecar(
         raise ValueError("transcript is empty")
 
     text = _LEADING_COMMENT_RE.sub("", transcript)
-    pages = len(_PAGE_HEADING_RE.findall(text))
+    pages = len(_UNIT_HEADING_RE.findall(text))
     if len(text) > MAX_TRANSCRIPT_CHARS:
         text, was_truncated = _truncate_agent_transcript(text)
         truncated = truncated or was_truncated
 
-    data = source_path.read_bytes()
-    sha256 = hashlib.sha256(data).hexdigest()
+    # Never read_bytes() a tier-3 (audio/video) source — _source_identity
+    # stat-hashes it instead, same as ensure_sidecar.
+    sha256, source_bytes, identity = _source_identity(source_path)
 
     extraction = Extraction(text=text, status="ok", reason="", pages=pages, truncated=truncated)
     sidecar_text = _render_sidecar(rel, extraction, version=AGENT_EXTRACTOR_VERSION)
@@ -787,7 +1199,8 @@ def register_sidecar(
     entries = manifest.setdefault("entries", {})
     entries[rel] = {
         "sha256": sha256,
-        "source_bytes": len(data),
+        "source_bytes": source_bytes,
+        "identity": identity,
         "extractor_version": AGENT_EXTRACTOR_VERSION,
         "sidecar": sidecar_rel,
         "sidecar_bytes": len(sidecar_text.encode("utf-8")),
@@ -837,7 +1250,10 @@ def _entry_state(entry: Dict[str, Any] | None, source_path: Path) -> str:
     placeholder), or ``ok`` (a fresh pypdf-extracted transcript)."""
     if entry is None:
         return "missing"
-    sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    # Never read_bytes() a tier-3 (audio/video) source (see
+    # AGENT_ORCHESTRATED_EXTENSIONS) — `retrieval sidecar --list` must stay
+    # a stat-only operation for these, same as ensure_sidecar/register_sidecar.
+    sha256, _source_bytes, _identity = _source_identity(source_path)
     if entry.get("sha256") != sha256:
         return "outdated"
     if entry.get("authored_by") == AUTHORED_BY_AGENT:

@@ -181,14 +181,27 @@ def _is_eligible_file(
     Two-stage size cap: an extractable suffix (e.g. ``.pdf``) is capped at
     *extract_max_bytes* instead of *max_bytes* — PDFs are typically much
     larger than plain-text source files, so applying the same small default
-    cap would silently exclude every real-world PDF.
+    cap would silently exclude every real-world PDF. A tier-3
+    agent-orchestrated suffix (audio/video) is exempted from any size cap
+    entirely: the engine never reads these files' bytes (see
+    ``extractors._source_identity``), only ``os.stat``s them, so there is no
+    memory-allocation reason to bound their size the way there is for a
+    format the engine (or an agent) actually reads in full — and a
+    multi-hour recording is exactly the case worth discovering.
     """
     filename = file_path.name
     if not _has_allowed_name(filename, extensions, include_basenames):
         return False
     if _matches_any_glob(filename, exclude_globs):
         return False
-    is_extractable = file_path.suffix.lower() in extractors.EXTRACTABLE_EXTENSIONS
+    suffix = file_path.suffix.lower()
+    if suffix in extractors.AGENT_ORCHESTRATED_EXTENSIONS:
+        try:
+            file_path.stat()  # OSError guard only; no size comparison.
+            return True
+        except OSError:
+            return False
+    is_extractable = suffix in extractors.EXTRACTABLE_EXTENSIONS
     cap = extract_max_bytes if is_extractable else max_bytes
     try:
         return file_path.stat().st_size <= cap

@@ -308,8 +308,9 @@ def _loader_kw_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
     ``{}`` unless ``--no-pdf`` was given (``args`` lacks ``no_pdf`` entirely
     on subparsers other than ``index``, e.g. ``eval``), in which case PDFs
-    *and every other sidecar-routed media suffix* (docx/pptx/xlsx/images)
-    are excluded from discovery for this run. Persisted verbatim into meta
+    *and every other sidecar-routed media suffix* (captions, docx/pptx/xlsx/
+    images, audio/video) are excluded from discovery for this run. Persisted
+    verbatim into meta
     via ``save_index``'s ``loader_kw`` and rehydrated by
     ``persistence.loader_kw_from_meta`` on every later flag-less
     ``index``/``query`` call, so passing ``--no-pdf`` once at index time is
@@ -893,22 +894,34 @@ def _discover_media(root: Path) -> List[Path]:
     ]
 
 
-def _discover_pdfs(root: Path) -> List[Path]:
-    """PDFs under *root* with a registered machine extractor, via the
-    default ``discover_files`` eligibility rules. Used by ``_cmd_extract``'s
-    extraction loop: ``extract`` stays machine/pypdf-only and must never
-    attempt agent-only media (docx/pptx/xlsx/images), which have no
-    extractor to run."""
+def _discover_machine_extractable(root: Path) -> List[Path]:
+    """Files under *root* with a registered machine extractor (pypdf-backed
+    ``.pdf``, stdlib-only caption files), via the default ``discover_files``
+    eligibility rules. Used by ``_cmd_extract``'s extraction loop: ``extract``
+    stays machine-extractor-only and must never attempt agent-only media
+    (docx/pptx/xlsx/images) or agent-orchestrated tier-3 audio/video, neither
+    of which has an extractor to run."""
     return [
         path for path in discover_files(root)
         if path.suffix.lower() in extractors.MACHINE_EXTRACTABLE_EXTENSIONS
     ]
 
 
+def _unit_noun(rel: str) -> str:
+    """"pages" for a PDF, "sections" for anything else with a machine
+    extractor (currently: caption files) — purely a display-label choice for
+    ``_print_extract_report``; the manifest field itself stays ``pages`` for
+    every suffix (see ``_extract_file_report``)."""
+    return "pages" if Path(rel).suffix.lower() in extractors.PYPDF_EXTENSIONS else "sections"
+
+
 def _extract_file_report(rel: str, sidecar: Any, entry: Dict[str, Any]) -> Dict[str, Any]:
     """One ``retrieval extract`` progress record for *rel*'s *sidecar*
     result; *entry* is that source's manifest entry (for ``pages``, which
-    ``extractors.Sidecar`` itself doesn't carry)."""
+    ``extractors.Sidecar`` itself doesn't carry). The manifest/JSON key stays
+    ``pages`` regardless of source format (PDF page count or caption section
+    count) — only the human-readable text-mode noun varies (see
+    ``_unit_noun``)."""
     return {
         "source": rel,
         "sidecar": sidecar.docid,
@@ -945,7 +958,7 @@ def _print_extract_report(
         if report["status"] == "ok":
             print(
                 f"{report['source']} -> {report['sidecar']} "
-                f"({report['pages']} pages, {report['chars']} chars)"
+                f"({report['pages']} {_unit_noun(report['source'])}, {report['chars']} chars)"
             )
         else:
             print(f"{report['source']}: stub ({report['reason']})")
@@ -970,21 +983,25 @@ def _warn_overwriting_agent_sidecars(root: Path) -> None:
 
 
 def _cmd_extract(args: argparse.Namespace) -> int:
-    """Pre-warm every PDF's sidecar transcript under *args.root*; never
-    builds/touches a retriever index. Hard-fails (guidance ``RuntimeError``,
-    caught by ``main``'s error boundary) only here, when the ``pdf`` extra
-    isn't installed — ``index``/``query`` never do.
+    """Pre-warm every machine-extractable sidecar transcript (PDF + caption
+    files) under *args.root*; never builds/touches a retriever index.
+    Hard-fails (guidance ``RuntimeError``, caught by ``main``'s error
+    boundary) only here, and only when a discovered file actually needs the
+    ``pdf`` extra — ``index``/``query`` never do. ``require_extractors`` is
+    called with the suffixes actually discovered (not the blanket
+    ``EXTRACTABLE_EXTENSIONS``), so a caption-only tree with zero PDFs never
+    raises the pypdf guidance error.
     """
     root = _resolve_root(args.root)
-    extractors.require_extractors(extractors.EXTRACTABLE_EXTENSIONS)
+    machine_paths = _discover_machine_extractable(root)
+    extractors.require_extractors({p.suffix.lower() for p in machine_paths})
     if args.force:
         _warn_overwriting_agent_sidecars(root)
-    pdf_paths = _discover_pdfs(root)
     sidecars = {
-        pdf_path.relative_to(root).as_posix(): extractors.ensure_sidecar(
-            root, pdf_path, force=args.force
+        path.relative_to(root).as_posix(): extractors.ensure_sidecar(
+            root, path, force=args.force
         )
-        for pdf_path in pdf_paths
+        for path in machine_paths
     }
     manifest_entries = extractors.load_manifest(root).get("entries", {})
     file_reports = [
@@ -1074,8 +1091,9 @@ def _cmd_sidecar_register(args: argparse.Namespace, root: Path) -> int:
     pages = manifest_entries.get(rel, {}).get("pages", 0)
     if pages == 0:
         print(
-            "note: no '## Page N' headings found in the transcript - page "
-            "breadcrumbs will be absent from search-hit context",
+            "note: no '## Page N' or '## [HH:MM:SS] ...' headings found in "
+            "the transcript - page/section breadcrumbs will be absent from "
+            "search-hit context",
             file=sys.stderr,
         )
 

@@ -599,7 +599,7 @@ class TestTruncateAtPageBoundary(unittest.TestCase):
         old_budget = extractors.MAX_TRANSCRIPT_CHARS
         extractors.MAX_TRANSCRIPT_CHARS = 400
         try:
-            transcript, truncated = extractors._truncate_at_page_boundary(page_bodies)
+            transcript, truncated = extractors._truncate_at_unit_boundary(page_bodies)
         finally:
             extractors.MAX_TRANSCRIPT_CHARS = old_budget
         self.assertTrue(truncated)
@@ -611,7 +611,7 @@ class TestTruncateAtPageBoundary(unittest.TestCase):
         old_budget = extractors.MAX_TRANSCRIPT_CHARS
         extractors.MAX_TRANSCRIPT_CHARS = 10
         try:
-            transcript, truncated = extractors._truncate_at_page_boundary(page_bodies)
+            transcript, truncated = extractors._truncate_at_unit_boundary(page_bodies)
         finally:
             extractors.MAX_TRANSCRIPT_CHARS = old_budget
         self.assertTrue(truncated)
@@ -841,10 +841,14 @@ class TestAgentOnlyMedia(unittest.TestCase):
             ".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp",
         }
         self.assertEqual(extractors.AGENT_ONLY_EXTENSIONS, frozenset(expected_agent_only))
-        self.assertEqual(extractors.MACHINE_EXTRACTABLE_EXTENSIONS, frozenset({".pdf"}))
+        self.assertEqual(
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS, frozenset({".pdf", ".srt", ".vtt"})
+        )
         self.assertEqual(
             extractors.EXTRACTABLE_EXTENSIONS,
-            extractors.MACHINE_EXTRACTABLE_EXTENSIONS | extractors.AGENT_ONLY_EXTENSIONS,
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS
+            | extractors.AGENT_ONLY_EXTENSIONS
+            | extractors.AGENT_ORCHESTRATED_EXTENSIONS,
         )
         self.assertTrue(expected_agent_only.issubset(extractors.EXTRACTABLE_EXTENSIONS))
 
@@ -941,6 +945,304 @@ class TestAgentOnlyMedia(unittest.TestCase):
     def test_require_extractors_no_op_for_agent_only_only_extension_set(self) -> None:
         # None of these need a backend: there isn't one for any of them.
         extractors.require_extractors(extractors.AGENT_ONLY_EXTENSIONS)  # must not raise
+
+
+def _write_srt(path: pathlib.Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body.encode("utf-8"))
+
+
+class TestCaptionExtraction(unittest.TestCase):
+    """Coverage for ``_extract_captions`` (.srt/.vtt tier-1 parsing) — must
+    pass with or without pypdf installed, since captions never touch that
+    backend at all (mirrors ``TestAgentAuthoredSidecar``'s independence)."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    _SRT = (
+        "1\n00:00:01,000 --> 00:00:04,000\nHello there, this is the first cue.\n\n"
+        "2\n00:00:04,200 --> 00:00:07,000\nAnd this is a second, closely-following cue.\n"
+    )
+    _VTT = (
+        "WEBVTT\n\n"
+        "1\n00:00:01.000 --> 00:00:04.000\nHello there, this is the first cue.\n\n"
+        "2\n00:00:04.200 --> 00:00:07.000\nAnd this is a second, closely-following cue.\n"
+    )
+
+    def test_srt_and_vtt_produce_byte_identical_bodies(self) -> None:
+        srt = extractors._extract_captions(self._SRT.encode("utf-8"))
+        vtt = extractors._extract_captions(self._VTT.encode("utf-8"))
+        self.assertEqual(srt.status, "ok")
+        self.assertEqual(srt.text, vtt.text)
+
+    def test_strips_markup_and_ass_override_tags(self) -> None:
+        srt = "1\n00:00:01,000 --> 00:00:04,000\n{\\an8}<b>Bold</b> and <i>italic</i> text.\n"
+        r = extractors._extract_captions(srt.encode("utf-8"))
+        self.assertIn("Bold and italic text.", r.text)
+        self.assertNotIn("<b>", r.text)
+        self.assertNotIn("{\\an8}", r.text)
+
+    def test_voice_tag_becomes_speaker_prefix(self) -> None:
+        vtt = (
+            "WEBVTT\n\n1\n00:00:01.000 --> 00:00:04.000\n<v Alice>Hello everyone here today.</v>\n"
+        )
+        r = extractors._extract_captions(vtt.encode("utf-8"))
+        self.assertIn("Alice: Hello everyone here today.", r.text)
+
+    def test_comma_and_dot_decimal_timestamps_both_parse(self) -> None:
+        srt_comma = "1\n00:00:01,500 --> 00:00:02,500\nComma decimal cue.\n"
+        vtt_dot = "1\n00:00:01.500 --> 00:00:02.500\nDot decimal cue.\n"
+        r1 = extractors._extract_captions(srt_comma.encode("utf-8"))
+        r2 = extractors._extract_captions(vtt_dot.encode("utf-8"))
+        self.assertEqual(r1.status, "ok")
+        self.assertEqual(r2.status, "ok")
+        self.assertIn("[00:00:01]", r1.text)
+        self.assertIn("[00:00:01]", r2.text)
+
+    def test_mm_ss_short_form_timestamp_parses(self) -> None:
+        vtt = "WEBVTT\n\n1\n01:30.000 --> 01:35.000\nShort-form timestamp cue.\n"
+        r = extractors._extract_captions(vtt.encode("utf-8"))
+        self.assertEqual(r.status, "ok")
+        self.assertIn("[00:01:30]", r.text)
+
+    def test_vtt_cue_settings_are_ignored(self) -> None:
+        vtt = (
+            "WEBVTT\n\n1\n00:00:01.000 --> 00:00:04.000 align:middle line:90%\n"
+            "Cue with trailing settings.\n"
+        )
+        r = extractors._extract_captions(vtt.encode("utf-8"))
+        self.assertEqual(r.status, "ok")
+        self.assertIn("Cue with trailing settings.", r.text)
+
+    def test_consecutive_duplicate_cues_are_collapsed(self) -> None:
+        srt = (
+            "1\n00:00:01,000 --> 00:00:02,000\nRepeated line of text here today.\n\n"
+            "2\n00:00:02,000 --> 00:00:03,000\nRepeated line of text here today.\n\n"
+            "3\n00:00:03,000 --> 00:00:04,000\nA genuinely different final cue.\n"
+        )
+        cues, _saw_arrow = extractors._iter_caption_cues(srt)
+        self.assertEqual(len(cues), 3)  # tokenizer sees all three raw cues...
+        r = extractors._extract_captions(srt.encode("utf-8"))
+        # ...but the extractor's dedup pass collapses the back-to-back
+        # repeat before merging: the repeated sentence is never immediately
+        # followed by itself again in the body.
+        self.assertNotIn(
+            "today. Repeated line of text here today.", r.text
+        )
+        self.assertIn("A genuinely different final cue.", r.text)
+
+    def test_paragraphs_are_timestamp_prefixed(self) -> None:
+        r = extractors._extract_captions(self._SRT.encode("utf-8"))
+        self.assertIn("[00:00:01]", r.text)
+
+    def test_new_section_after_180_seconds(self) -> None:
+        srt = (
+            "1\n00:00:01,000 --> 00:00:02,000\nFirst section opening cue right here.\n\n"
+            "2\n00:03:05,000 --> 00:03:06,000\nSecond section far enough later on.\n"
+        )
+        r = extractors._extract_captions(srt.encode("utf-8"))
+        self.assertEqual(r.pages, 2)
+        self.assertIn("## [00:00:01]", r.text)
+        self.assertIn("## [00:03:05]", r.text)
+
+    def test_zero_cues_yields_no_cues_stub(self) -> None:
+        vtt = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:04.000\n\n"
+        r = extractors._extract_captions(vtt.encode("utf-8"))
+        self.assertEqual(r.status, "stub")
+        self.assertEqual(r.reason, "no-cues")
+
+    def test_no_arrow_lines_yields_malformed_stub(self) -> None:
+        r = extractors._extract_captions(b"this file has no cue timing lines at all")
+        self.assertEqual(r.status, "stub")
+        self.assertEqual(r.reason, "malformed")
+
+    def test_cp1252_bytes_decode_without_raising(self) -> None:
+        body = (
+            "1\n00:00:01,000 --> 00:00:04,000\nCaf\xe9 with a non-UTF8 byte.\n"
+        ).encode("cp1252")
+        r = extractors._extract_captions(body)
+        self.assertEqual(r.status, "ok")
+
+    def test_pages_field_counts_sections(self) -> None:
+        r = extractors._extract_captions(self._SRT.encode("utf-8"))
+        self.assertEqual(r.pages, 1)
+
+    def test_determinism_two_calls_identical_output(self) -> None:
+        r1 = extractors._extract_captions(self._SRT.encode("utf-8"))
+        r2 = extractors._extract_captions(self._SRT.encode("utf-8"))
+        self.assertEqual(r1.text, r2.text)
+
+    def test_captions_extractor_version_stamped_in_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            srt_path = root / "talk.srt"
+            _write_srt(srt_path, self._SRT)
+            extractors.ensure_sidecar(root, srt_path)
+            entry = extractors.load_manifest(root)["entries"]["talk.srt"]
+            self.assertEqual(entry["extractor_version"], extractors.CAPTIONS_EXTRACTOR_VERSION)
+
+    def test_cache_hit_on_second_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            srt_path = root / "talk.srt"
+            _write_srt(srt_path, self._SRT)
+            s1 = extractors.ensure_sidecar(root, srt_path)
+            self.assertFalse(s1.cache_hit)
+            extractors.clear_process_cache()
+            s2 = extractors.ensure_sidecar(root, srt_path)
+            self.assertTrue(s2.cache_hit)
+
+    def test_works_without_pypdf_installed(self) -> None:
+        # Mirrors TestMissingPypdfGuidance's _no_pypdf idiom: captions never
+        # touch pypdf, so this must pass regardless of what's installed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            srt_path = root / "talk.srt"
+            _write_srt(srt_path, self._SRT)
+            extractors.clear_process_cache()
+            sidecar = extractors.ensure_sidecar(root, srt_path)
+            self.assertEqual(sidecar.status, "ok")
+
+
+class TestUnitHeadingRegex(unittest.TestCase):
+    def test_matches_page_heading(self) -> None:
+        self.assertTrue(extractors._UNIT_HEADING_RE.search("## Page 7\n"))
+
+    def test_matches_timestamp_heading(self) -> None:
+        self.assertTrue(extractors._UNIT_HEADING_RE.search("## [01:02:03] Some topic\n"))
+
+    def test_rejects_prose_subheading(self) -> None:
+        self.assertFalse(extractors._UNIT_HEADING_RE.search("## Introduction\n"))
+
+    def test_rejects_non_numeric_page(self) -> None:
+        self.assertFalse(extractors._UNIT_HEADING_RE.search("## Page seven\n"))
+
+    def test_rejects_h3_timestamp(self) -> None:
+        self.assertFalse(extractors._UNIT_HEADING_RE.search("### [00:00:00] x\n"))
+
+    def test_truncation_at_timestamp_boundary(self) -> None:
+        segments = [f"## [00:0{i}:00] section\n\n" + ("word " * 50) for i in range(5)]
+        old_budget = extractors.MAX_TRANSCRIPT_CHARS
+        extractors.MAX_TRANSCRIPT_CHARS = 400
+        try:
+            transcript, truncated = extractors._truncate_at_unit_boundary(segments)
+        finally:
+            extractors.MAX_TRANSCRIPT_CHARS = old_budget
+        self.assertTrue(truncated)
+        self.assertTrue(transcript.count("## [00:0") < 5)
+
+
+class TestStatOnlyIdentity(unittest.TestCase):
+    """Coverage for tier-3 (``AGENT_ORCHESTRATED_EXTENSIONS``) stat-only
+    source identity — the highest-risk change in this batch: the engine
+    must never read a video/audio file's bytes."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    def test_ensure_sidecar_never_calls_read_bytes_on_mp4(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            mp4_path = root / "talk.mp4"
+            mp4_path.write_bytes(b"fake video payload, not really an mp4")
+            extractors.clear_process_cache()
+
+            original_read_bytes = pathlib.Path.read_bytes
+
+            def _boom(self, *a, **k):
+                raise AssertionError(f"read_bytes() called on {self}")
+
+            pathlib.Path.read_bytes = _boom
+            try:
+                sidecar = extractors.ensure_sidecar(root, mp4_path)
+            finally:
+                pathlib.Path.read_bytes = original_read_bytes
+            self.assertEqual(sidecar.status, "stub")
+            self.assertEqual(sidecar.reason, "agent-orchestrated")
+
+    def test_identity_field_is_stat_1_for_tier3(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            mp4_path = root / "talk.mp4"
+            mp4_path.write_bytes(b"fake video payload")
+            extractors.ensure_sidecar(root, mp4_path)
+            entry = extractors.load_manifest(root)["entries"]["talk.mp4"]
+            self.assertEqual(entry["identity"], extractors.IDENTITY_STAT)
+
+    def test_register_then_ensure_is_cache_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            mp4_path = root / "talk.mp4"
+            mp4_path.write_bytes(b"fake video payload")
+            extractors.register_sidecar(
+                root, mp4_path, "## [00:00:00] Intro\n\n[00:00:00] Hello from ASR."
+            )
+            extractors.clear_process_cache()
+            sidecar = extractors.ensure_sidecar(root, mp4_path)
+            self.assertTrue(sidecar.cache_hit)
+            self.assertEqual(sidecar.status, "ok")
+
+    def test_utime_bump_invalidates_stat_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            mp4_path = root / "talk.mp4"
+            mp4_path.write_bytes(b"fake video payload")
+            extractors.ensure_sidecar(root, mp4_path)
+            new_ns = mp4_path.stat().st_mtime_ns + 1_000_000_000
+            os.utime(mp4_path, ns=(new_ns, new_ns))
+            extractors.clear_process_cache()
+            sidecar = extractors.ensure_sidecar(root, mp4_path)
+            self.assertFalse(sidecar.cache_hit)
+
+    def test_sidecar_list_does_not_read_bytes_for_tier3(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            mp4_path = root / "talk.mp4"
+            mp4_path.write_bytes(b"fake video payload")
+            extractors.ensure_sidecar(root, mp4_path)
+            extractors.clear_process_cache()
+
+            original_read_bytes = pathlib.Path.read_bytes
+
+            def _boom(self, *a, **k):
+                raise AssertionError(f"read_bytes() called on {self}")
+
+            pathlib.Path.read_bytes = _boom
+            try:
+                states = extractors.sidecar_states(root, [mp4_path])
+            finally:
+                pathlib.Path.read_bytes = original_read_bytes
+            self.assertEqual(states[0]["state"], "stub")
+
+    @unittest.skipUnless(_PYPDF_INSTALLED, "pypdf not installed")
+    def test_pdf_still_hash_stable_sha256_1(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            pdf_path = root / "doc.pdf"
+            _write_pdf(pdf_path, pages=1)
+            extractors.ensure_sidecar(root, pdf_path)
+            entry = extractors.load_manifest(root)["entries"]["doc.pdf"]
+            self.assertEqual(entry["identity"], extractors.IDENTITY_SHA256)
+            self.assertEqual(entry["sha256"], hashlib.sha256(pdf_path.read_bytes()).hexdigest())
+
+
+class TestRequireExtractorsSplit(unittest.TestCase):
+    """``require_extractors`` only cares about ``PYPDF_EXTENSIONS`` now —
+    every other extractable tier (captions, agent-only, agent-orchestrated)
+    is a no-op regardless of whether pypdf is installed."""
+
+    def test_no_op_for_captions_only(self) -> None:
+        extractors.require_extractors({".srt"})  # must not raise
+        extractors.require_extractors({".vtt"})  # must not raise
+
+    def test_no_op_for_agent_orchestrated_only(self) -> None:
+        extractors.require_extractors(extractors.AGENT_ORCHESTRATED_EXTENSIONS)  # must not raise
+
+    @unittest.skipIf(_PYPDF_INSTALLED, "pypdf installed; guidance path not exercised")
+    def test_raises_for_pdf_extension(self) -> None:
+        with self.assertRaises(RuntimeError):
+            extractors.require_extractors({".pdf"})
 
 
 if __name__ == "__main__":

@@ -512,5 +512,54 @@ class TestAgentOnlyMediaDiscovery(unittest.TestCase):
             self.assertIn("sidecar --register", doc.text)
 
 
+class TestMediaTierDiscovery(unittest.TestCase):
+    """Coverage for the three-tier media model's interaction with discovery:
+    pairwise-disjoint suffix sets, union consistency, and the uncapped
+    tier-3 size exemption."""
+
+    def setUp(self) -> None:
+        extractors.clear_process_cache()
+
+    def test_tiers_are_pairwise_disjoint(self) -> None:
+        self.assertEqual(
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS & extractors.AGENT_ONLY_EXTENSIONS,
+            frozenset(),
+        )
+        self.assertEqual(
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS
+            & extractors.AGENT_ORCHESTRATED_EXTENSIONS,
+            frozenset(),
+        )
+        self.assertEqual(
+            extractors.AGENT_ONLY_EXTENSIONS & extractors.AGENT_ORCHESTRATED_EXTENSIONS,
+            frozenset(),
+        )
+
+    def test_extractable_extensions_is_the_three_tier_union(self) -> None:
+        self.assertEqual(
+            extractors.EXTRACTABLE_EXTENSIONS,
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS
+            | extractors.AGENT_ONLY_EXTENSIONS
+            | extractors.AGENT_ORCHESTRATED_EXTENSIONS,
+        )
+
+    def test_large_mp4_discovered_while_similarly_large_pdf_is_not(self) -> None:
+        from tests.test_extractors import _write_pdf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            mp4_path = root / "recording.mp4"
+            mp4_path.write_bytes(b"\x00" * 40_000_000)  # 40MB, well over EXTRACT_MAX_BYTES
+
+            pdf_path = root / "paper.pdf"
+            _write_pdf(pdf_path, pages=1)
+            with open(pdf_path, "ab") as fh:
+                fh.write(b"\n%" + b"a" * (30_000_000 - pdf_path.stat().st_size))
+
+            discovered = {p.relative_to(root).as_posix() for p in discover_files(root)}
+            self.assertIn("recording.mp4", discovered)
+            self.assertNotIn("paper.pdf", discovered)
+
+
 if __name__ == "__main__":
     unittest.main()
