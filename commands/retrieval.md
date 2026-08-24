@@ -60,13 +60,15 @@ Thin dispatcher — invoke the `retrieval` skill and follow its steps exactly.
 
 See `hybrid-retrieval-usage` for the full decision walkthrough.
 
-Without the `pdf` extra, don't leave PDF and other media (docx/pptx/xlsx/
-images) as placeholder stubs — author their transcripts yourself and
-register with `retrieval sidecar --register`; see
-`skills/retrieval/SKILL.md`'s "Author the media transcript yourself (the
-default media path)" section for the full workflow. Non-PDF media has no
-machine-extraction option at all — `sidecar --register` is the only way
-to index it, `pdf` extra or not.
+Don't leave PDF and other media (docx/pptx/xlsx/images) as placeholder
+stubs — author their transcripts yourself and register with `retrieval
+sidecar --register`; see `skills/retrieval/SKILL.md`'s "Author the media
+transcript yourself (the default media path)" section for the full
+workflow. This is the default path regardless of whether the `pdf` extra
+is synced: a PDF without the `pdf` extra indexes as a stub until you
+author its transcript (or you opt in to machine extraction instead), while
+non-PDF media has no machine-extraction option at all — `sidecar
+--register` is the only way to index it, `pdf` extra or not.
 
 After setup, the skill searches the invoking project's own files with the
 zero-dependency `LexicalRetriever`, via the `retrieval` console-script CLI
