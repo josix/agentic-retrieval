@@ -6,6 +6,34 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.11.0 — 2026-09-21
+
+- **\[engine\] CAD/BIM indexing** — `.dxf`, `.dwg`, `.ifc` and `.ids` files
+  are now discovered by default and parsed into *descriptive* sidecar
+  transcripts (new `retrieval.cad_extractors`), so a drawing or model can be
+  retrieved by description. A DXF/DWG summary covers units, layers, block
+  references, every text string, dimensions, circle groups, closed-polyline
+  areas, hole-callout vs. geometry conflicts and external dependencies; an
+  IFC summary covers schema, spatial structure, property-set coverage per
+  class, elements with GlobalIds and whether geometry exists; an IDS summary
+  states each specification in words. Values that cannot be established
+  (unknown units, arc boundaries, missing properties) are reported as such,
+  never guessed. New extras: `cad` (ezdxf) and `bim` (ifcopenshell), both in
+  `all`; `.ids` needs none. Native `.dwg` additionally needs LibreDWG's
+  `dwg2dxf` or the ODA File Converter on `PATH`.
+- **\[engine\] Per-suffix extractor backends** — `extractors.Backend`,
+  `backend_ready(suffix)`, `extractor_version_for(suffix)` and
+  `backend_status()` replace the implicit "pypdf is the only backend"
+  assumption. Manifest entries are stamped with their own suffix's extractor
+  version, `backend-missing` stubs self-heal per suffix, and
+  `sidecar --list --json` gains a `backends` map. `backend_available()` is
+  unchanged (pypdf). `retrieval extract` no longer demands the `pdf` extra
+  for a tree with no PDFs; a missing CAD/BIM backend yields a guidance stub
+  rather than a hard failure.
+- **\[plugin\] `cad-bim-retrieval-usage` skill** — find DWG/DXF/IFC/IDS files
+  by description and explain the parsed content with citable evidence
+  (layers, handles, GlobalIds) and explicit limits; linked from `/retrieval`.
+
 ## 0.10.0 — 2026-08-21
 
 - **\[engine\] Terraform/HCL indexing** — `.tf`, `.tfvars`, and `.hcl` are

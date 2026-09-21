@@ -238,6 +238,18 @@ below is the *only* way to index their real content. `retrieval sidecar
 --list` reports them the same way as a PDF stub (`state: stub`, `reason:
 agent-only`).
 
+**CAD/BIM files are machine-summarized.** `.dxf`, `.dwg`, `.ifc` and `.ids`
+are discovered the same way and parsed into a *descriptive* sidecar (layers,
+text, dimensions, areas, property-set coverage, requirements in words), so
+a user can ask for a drawing or model by description and get an explanation
+of what the parser found. Unlike PDFs, this tier is **not** delegated to
+you: you cannot usefully `Read()` a binary DWG or a raw DXF/IFC, so add
+`--extra cad --extra bim` to `$EXTRAS` when the project contains these files
+(`.ids` needs nothing; native `.dwg` also needs a `dwg2dxf` or ODA converter
+on `PATH`). A missing backend yields a `backend-missing` guidance stub, never
+a hard failure. See the `cad-bim-retrieval-usage` skill for the workflow and
+for how to present the result.
+
 #### Without the `pdf` extra: author the transcript yourself
 
 This is the **default media-indexing path** — for PDFs *and* for
@@ -629,3 +641,4 @@ snippets, graceful degradation) and for combining methods, see:
 - `lucene-retrieval-usage` — pi-serini Lucene BM25 retrieval
 - `code-retrieval-usage` — tree-sitter AST-boundary chunking for code corpora
 - `hybrid-retrieval-usage` — fusing methods and choosing between them
+- `cad-bim-retrieval-usage` — finding and explaining DWG/DXF/IFC/IDS files by description

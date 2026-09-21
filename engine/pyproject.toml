@@ -1,6 +1,6 @@
 [project]
 name = "agentic-retrieval"
-version = "0.10.0"
+version = "0.11.0"
 description = "Fully offline contextual RAG retrieval experiment"
 requires-python = ">=3.10"
 license = "MIT"
@@ -43,8 +43,15 @@ treesitter = ["tree-sitter>=0.24,<0.26", "tree-sitter-language-pack"]
 # with zero deps on py3.11+ (BSD-3); capped below 7 as a routine major-bump
 # guard, same convention as the treesitter pin above.
 pdf = ["pypdf>=6,<7"]
-# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter + pdf)
-all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter,pdf]"]
+# CAD drawing summaries (.dxf, and .dwg via an external converter on PATH:
+# LibreDWG's dwg2dxf or the ODA File Converter). ezdxf is MIT, pure Python
+# with optional C accelerators.
+cad = ["ezdxf>=1.3,<2"]
+# BIM model summaries (.ifc). ifcopenshell is LGPL-3.0 and ships binary
+# wheels; .ids needs no extra (stdlib XML).
+bim = ["ifcopenshell>=0.8,<0.9"]
+# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter + pdf + cad + bim)
+all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter,pdf,cad,bim]"]
 # Dev tooling
 dev = ["ruff", "isort", "complexipy"]
 

@@ -89,7 +89,14 @@ AUTHORED_BY_AGENT = "agent"
 #: question (``require_extractors`` preflight, ``cli._discover_pdfs`` /
 #: ``_cmd_extract``'s extraction loop) — never for discovery eligibility,
 #: which is ``EXTRACTABLE_EXTENSIONS`` (below).
-MACHINE_EXTRACTABLE_EXTENSIONS = frozenset({".pdf"})
+MACHINE_EXTRACTABLE_EXTENSIONS = frozenset({".pdf", ".dxf", ".dwg", ".ifc", ".ids"})
+
+#: CAD/BIM subset of ``MACHINE_EXTRACTABLE_EXTENSIONS`` (see
+#: ``retrieval.cad_extractors``). Unlike a PDF or an office document, a coding
+#: agent cannot read these natively (a DWG is opaque binary; a DXF/IFC is
+#: text but far too long and low-level to read usefully), so the machine
+#: summary is the primary path and an agent transcript is the fallback.
+CAD_EXTENSIONS = frozenset({".dxf", ".dwg", ".ifc", ".ids"})
 
 #: Suffixes with **no** machine extractor at all: office documents and
 #: images a coding agent can read/view natively (Read tool / vision) but
@@ -168,6 +175,27 @@ class Sidecar:
 
 _EXTRACTORS: Dict[str, Callable[[bytes], Extraction]] = {}
 
+
+@dataclass(frozen=True)
+class Backend:
+    """What a suffix's machine extractor needs, and how to say it's missing.
+
+    ``version`` is stamped on manifest entries (bumping it re-extracts that
+    suffix only); ``probe`` is a lazy availability check, used ONLY for
+    regeneration/staleness decisions, never for discovery eligibility.
+    """
+
+    name: str
+    version: str
+    probe: Callable[[], bool]
+    missing_message: str
+
+
+#: Suffix -> ``Backend``. ``.pdf`` is deliberately absent: its probe is the
+#: module-level ``backend_available`` (kept zero-arg and looked up by name at
+#: call time, so tests and callers that replace it keep working).
+_BACKENDS: Dict[str, Backend] = {}
+
 #: Process-level memo of ``ensure_sidecar`` results, keyed by
 #: ``(abs_path, st_size, st_mtime_ns)`` — avoids re-hashing/re-extracting the
 #: same file multiple times within one ``index --auto`` run (which loads the
@@ -182,6 +210,9 @@ _WARNED = False
 #: "register a transcript" note prints at most once per process (mirrors
 #: ``_WARNED``).
 _WARNED_AGENT_ONLY = False
+
+#: Non-PDF backends (by ``Backend.name``) already warned about this process.
+_WARNED_BACKENDS: "set[str]" = set()
 
 _MSG_ENCRYPTED = (
     "This PDF is password-protected and could not be decrypted with an "
@@ -216,9 +247,17 @@ _MSG_AGENT_ONLY = (
 )
 
 
-def register_extractor(suffix: str, fn: Callable[[bytes], Extraction]) -> None:
-    """Register *fn* as the extractor for files with *suffix* (e.g. ``.pdf``)."""
+def register_extractor(
+    suffix: str, fn: Callable[[bytes], Extraction], backend: "Backend | None" = None
+) -> None:
+    """Register *fn* as the extractor for files with *suffix* (e.g. ``.pdf``).
+
+    *backend* describes the suffix's own optional dependency; omitted, the
+    suffix shares the PDF backend (``backend_available`` / ``EXTRACTOR_VERSION``).
+    """
     _EXTRACTORS[suffix.lower()] = fn
+    if backend is not None:
+        _BACKENDS[suffix.lower()] = backend
 
 
 def extractor_for(path: "os.PathLike[str] | str") -> Callable[[bytes], Extraction] | None:
@@ -237,7 +276,11 @@ def require_extractors(extensions: Iterable[str]) -> None:
     ``AGENT_ONLY_EXTENSIONS`` never needs a backend (there isn't one), so
     they're excluded from this guard.
     """
-    if not any(ext.lower() in MACHINE_EXTRACTABLE_EXTENSIONS for ext in extensions):
+    # pypdf-only: CAD/BIM backends (``_BACKENDS``) are soft - a missing one
+    # yields a guidance stub, never a hard failure (a DWG converter is a
+    # system binary `extract` can't expect everywhere).
+    if not any(ext.lower() not in _BACKENDS and ext.lower() in MACHINE_EXTRACTABLE_EXTENSIONS
+               for ext in extensions):
         return
     try:
         import pypdf  # noqa: F401
@@ -264,6 +307,23 @@ def backend_available() -> bool:
     except ImportError:
         return False
     return True
+
+
+def backend_ready(suffix: str) -> bool:
+    """True if *suffix*'s machine extractor can run in this environment."""
+    backend = _BACKENDS.get(suffix.lower())
+    return backend.probe() if backend is not None else backend_available()
+
+
+def extractor_version_for(suffix: str) -> str:
+    """Extractor-version string stamped on *suffix*'s machine-extracted entries."""
+    backend = _BACKENDS.get(suffix.lower())
+    return backend.version if backend is not None else EXTRACTOR_VERSION
+
+
+def backend_status() -> Dict[str, bool]:
+    """``{suffix: backend_ready}`` for every machine-extractable suffix."""
+    return {suffix: backend_ready(suffix) for suffix in sorted(MACHINE_EXTRACTABLE_EXTENSIONS)}
 
 
 def clear_process_cache() -> None:
@@ -343,15 +403,26 @@ def needs_reextraction(root: "os.PathLike[str] | str") -> bool:
     """
     if not _manifest_path(root).exists():
         return False
-    if not backend_available():
-        return False
     manifest = load_manifest(root)
     entries = manifest.get("entries", {})
-    return any(entry.get("reason") == "backend-missing" for entry in entries.values())
+    return any(
+        entry.get("reason") == "backend-missing" and backend_ready(PurePosixPath(rel).suffix)
+        for rel, entry in entries.items()
+    )
 
 
-def _warn_backend_missing() -> None:
+def _warn_backend_missing(suffix: str = ".pdf") -> None:
     global _WARNED
+    backend = _BACKENDS.get(suffix.lower())
+    if backend is not None:
+        if backend.name not in _WARNED_BACKENDS:
+            print(
+                f"warning: {backend.name} is not available - {suffix} sidecars are written "
+                "as stub placeholders (see the stub for install guidance)",
+                file=sys.stderr,
+            )
+            _WARNED_BACKENDS.add(backend.name)
+        return
     if not _WARNED:
         print(
             "warning: pypdf is not installed - PDF sidecars are written as "
@@ -581,6 +652,73 @@ def _extract_pdf(data: bytes) -> Extraction:
 register_extractor(".pdf", _extract_pdf)
 
 
+def _probe_import(module: str) -> Callable[[], bool]:
+    def probe() -> bool:
+        try:
+            __import__(module)
+        except ImportError:
+            return False
+        return True
+
+    return probe
+
+
+def _probe_dwg() -> bool:
+    if not _probe_import("ezdxf")():
+        return False
+    from retrieval import cad_extractors
+
+    return cad_extractors.dwg_converter() is not None
+
+
+def _cad(name: str) -> Callable[[bytes], Extraction]:
+    """Lazy trampoline into ``retrieval.cad_extractors`` (which imports this
+    module at its own import scope, so it can't be imported up here)."""
+
+    def extract(data: bytes) -> Extraction:
+        from retrieval import cad_extractors
+
+        return getattr(cad_extractors, name)(data)
+
+    return extract
+
+
+_MSG_NO_NATIVE_READ = (
+    " A coding agent cannot usefully read this format natively; if the backend "
+    "can't be installed, summarize the file with another tool and register that "
+    "via `retrieval sidecar --register <file> --transcript <transcript>`."
+)
+
+register_extractor(".dxf", _cad("extract_dxf"), Backend(
+    name="ezdxf", version="ezdxf-summary/1", probe=_probe_import("ezdxf"),
+    missing_message=(
+        "ezdxf is not installed, so this DXF drawing could not be summarized. Install the "
+        "'cad' extra (`uv pip install -e '.[cad]'`) and reindex." + _MSG_NO_NATIVE_READ
+    ),
+))
+register_extractor(".dwg", _cad("extract_dwg"), Backend(
+    name="DWG converter", version="dwg-convert+ezdxf-summary/1", probe=_probe_dwg,
+    missing_message=(
+        "No DWG reader is available, so this native DWG drawing could not be summarized. "
+        "DWG is a closed binary format with no pure-Python reader: install the 'cad' extra "
+        "(`uv pip install -e '.[cad]'`) plus a converter on PATH - LibreDWG's `dwg2dxf` "
+        "(`brew install libredwg`) or the ODA File Converter - and reindex."
+        + _MSG_NO_NATIVE_READ
+    ),
+))
+register_extractor(".ifc", _cad("extract_ifc"), Backend(
+    name="ifcopenshell", version="ifcopenshell-summary/1", probe=_probe_import("ifcopenshell"),
+    missing_message=(
+        "ifcopenshell is not installed, so this IFC building model could not be summarized. "
+        "Install the 'bim' extra (`uv pip install -e '.[bim]'`) and reindex."
+        + _MSG_NO_NATIVE_READ
+    ),
+))
+register_extractor(".ids", _cad("extract_ids"), Backend(
+    name="xml", version="ids-xml/1", probe=lambda: True, missing_message="",
+))
+
+
 def _engine_version() -> str:
     """Lazy import of ``retrieval.__version__`` (avoids a module-scope
     circular import: ``retrieval/__init__.py`` imports ``persistence``,
@@ -593,13 +731,18 @@ def _engine_version() -> str:
 
 
 def _is_cache_hit(
-    entry: Dict[str, Any] | None, sha256: str, sidecar_path: Path, force: bool
+    entry: Dict[str, Any] | None, sha256: str, sidecar_path: Path, force: bool,
+    suffix: str = ".pdf",
 ) -> bool:
     if force or entry is None:
         return False
     if entry.get("sha256") != sha256:
         return False
-    if entry.get("extractor_version") not in _ACCEPTED_EXTRACTOR_VERSIONS:
+    # Fresh means: this suffix's own machine version, or an agent transcript
+    # (for .pdf that is exactly _ACCEPTED_EXTRACTOR_VERSIONS).
+    if entry.get("extractor_version") not in (
+        extractor_version_for(suffix), AGENT_EXTRACTOR_VERSION
+    ):
         return False
     # A hand-corrupted manifest entry missing either key is treated as a
     # cache miss (triggering a fresh extraction), not a KeyError later in
@@ -614,7 +757,7 @@ def _is_cache_hit(
         return False
     if actual_size != entry.get("sidecar_bytes"):
         return False
-    if entry.get("reason") == "backend-missing" and backend_available():
+    if entry.get("reason") == "backend-missing" and backend_ready(suffix):
         return False
     return True
 
@@ -652,7 +795,8 @@ def ensure_sidecar(
     data = source_path.read_bytes()
     sha256 = hashlib.sha256(data).hexdigest()
 
-    if _is_cache_hit(entry, sha256, sidecar_path, force):
+    suffix = source_path.suffix.lower()
+    if _is_cache_hit(entry, sha256, sidecar_path, force, suffix):
         text = sidecar_path.read_text(encoding="utf-8")
         sidecar = Sidecar(
             docid=sidecar_rel, path=sidecar_path, text=text,
@@ -671,20 +815,27 @@ def ensure_sidecar(
         # be caught by that (it would loop forever re-stubbing a docx).
         _warn_agent_only()
         extraction = _stub("agent-only", _MSG_AGENT_ONLY)
-    elif backend_available():
+    elif backend_ready(suffix):
         extraction = extractor(data)
     else:
-        _warn_backend_missing()
-        extraction = _stub("backend-missing", _MSG_BACKEND_MISSING)
+        _warn_backend_missing(suffix)
+        backend = _BACKENDS.get(suffix)
+        message = backend.missing_message if backend is not None else _MSG_BACKEND_MISSING
+        if suffix == ".dwg":
+            from retrieval import cad_extractors
 
-    sidecar_text = _render_sidecar(rel, extraction)
+            message += f" DWG release: {cad_extractors.dwg_release(data)}."
+        extraction = _stub("backend-missing", message)
+
+    version = extractor_version_for(suffix)
+    sidecar_text = _render_sidecar(rel, extraction, version=version)
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path.write_text(sidecar_text, encoding="utf-8")
 
     entries[rel] = {
         "sha256": sha256,
         "source_bytes": len(data),
-        "extractor_version": EXTRACTOR_VERSION,
+        "extractor_version": version,
         "sidecar": sidecar_rel,
         "sidecar_bytes": len(sidecar_text.encode("utf-8")),
         "pages": extraction.pages,

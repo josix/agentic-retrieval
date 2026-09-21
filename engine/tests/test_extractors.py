@@ -841,7 +841,11 @@ class TestAgentOnlyMedia(unittest.TestCase):
             ".docx", ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp",
         }
         self.assertEqual(extractors.AGENT_ONLY_EXTENSIONS, frozenset(expected_agent_only))
-        self.assertEqual(extractors.MACHINE_EXTRACTABLE_EXTENSIONS, frozenset({".pdf"}))
+        self.assertEqual(
+            extractors.MACHINE_EXTRACTABLE_EXTENSIONS,
+            frozenset({".pdf"}) | extractors.CAD_EXTENSIONS,
+        )
+        self.assertEqual(extractors.CAD_EXTENSIONS, frozenset({".dxf", ".dwg", ".ifc", ".ids"}))
         self.assertEqual(
             extractors.EXTRACTABLE_EXTENSIONS,
             extractors.MACHINE_EXTRACTABLE_EXTENSIONS | extractors.AGENT_ONLY_EXTENSIONS,

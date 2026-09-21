@@ -240,7 +240,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     extract_parser = subparsers.add_parser(
         "extract",
-        help="pre-warm PDF sidecar transcripts for a project root, without "
+        help="pre-warm PDF and CAD/BIM sidecar transcripts for a project root, without "
         "building/touching any retriever index",
     )
     extract_parser.add_argument(
@@ -893,12 +893,13 @@ def _discover_media(root: Path) -> List[Path]:
     ]
 
 
-def _discover_pdfs(root: Path) -> List[Path]:
-    """PDFs under *root* with a registered machine extractor, via the
-    default ``discover_files`` eligibility rules. Used by ``_cmd_extract``'s
-    extraction loop: ``extract`` stays machine/pypdf-only and must never
-    attempt agent-only media (docx/pptx/xlsx/images), which have no
-    extractor to run."""
+def _discover_machine_extractable(root: Path) -> List[Path]:
+    """Files under *root* with a registered machine extractor (PDF, and the
+    CAD/BIM formats in ``extractors.CAD_EXTENSIONS``), via the default
+    ``discover_files`` eligibility rules. Used by ``_cmd_extract``'s
+    extraction loop: ``extract`` stays machine-only and must never attempt
+    agent-only media (docx/pptx/xlsx/images), which have no extractor to
+    run."""
     return [
         path for path in discover_files(root)
         if path.suffix.lower() in extractors.MACHINE_EXTRACTABLE_EXTENSIONS
@@ -943,10 +944,8 @@ def _print_extract_report(
         return
     for report in file_reports:
         if report["status"] == "ok":
-            print(
-                f"{report['source']} -> {report['sidecar']} "
-                f"({report['pages']} pages, {report['chars']} chars)"
-            )
+            size = f"{report['pages']} pages, " if report["pages"] else ""
+            print(f"{report['source']} -> {report['sidecar']} ({size}{report['chars']} chars)")
         else:
             print(f"{report['source']}: stub ({report['reason']})")
     if pruned:
@@ -964,7 +963,8 @@ def _warn_overwriting_agent_sidecars(root: Path) -> None:
     )
     if n_agent:
         print(
-            f"warning: overwriting {n_agent} agent-authored sidecar(s) with pypdf output",
+            f"warning: overwriting {n_agent} agent-authored sidecar(s) "
+            "with machine-extracted output",
             file=sys.stderr,
         )
 
@@ -976,10 +976,17 @@ def _cmd_extract(args: argparse.Namespace) -> int:
     isn't installed — ``index``/``query`` never do.
     """
     root = _resolve_root(args.root)
-    extractors.require_extractors(extractors.EXTRACTABLE_EXTENSIONS)
+    pdf_paths = _discover_machine_extractable(root)
+    # Hard-fail only for a backend this run actually needs: a CAD-only tree
+    # must not demand pypdf. No machine-extractable files at all keeps the
+    # historical "extract needs the pdf extra" preflight. A missing CAD/BIM
+    # backend is soft (a guidance stub), since a DWG converter is a system
+    # binary an `extract` run can't be expected to have everywhere.
+    extractors.require_extractors(
+        {path.suffix.lower() for path in pdf_paths} or extractors.EXTRACTABLE_EXTENSIONS
+    )
     if args.force:
         _warn_overwriting_agent_sidecars(root)
-    pdf_paths = _discover_pdfs(root)
     sidecars = {
         pdf_path.relative_to(root).as_posix(): extractors.ensure_sidecar(
             root, pdf_path, force=args.force
@@ -1027,6 +1034,7 @@ def _cmd_sidecar_list(args: argparse.Namespace, root: Path) -> int:
                 {
                     "root": str(root),
                     "backend_available": extractors.backend_available(),
+                    "backends": extractors.backend_status(),
                     "files": states,
                 }
             )

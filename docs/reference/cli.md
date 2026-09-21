@@ -174,13 +174,19 @@ results; `1` only if even `lexical` is unusable.
 
 ## `extract`
 
-Pre-warm every PDF's sidecar transcript under a project root, without
+Pre-warm every machine-extractable file's sidecar transcript (PDF, and the
+CAD/BIM formats `.dxf`, `.dwg`, `.ifc`, `.ids`) under a project root, without
 building or touching any retriever index — useful for pre-warming a large
 corpus's extraction cache ahead of time (e.g. in CI, or before a first
 `index` run) so that `index`/`query` don't pay the extraction cost inline.
-**PDF only** — `extract` never attempts agent-only media (`.docx`, `.pptx`,
-`.xlsx`, images), which have no machine extractor to run; those always need
-`sidecar --register`.
+**Machine-extractable formats only** — `extract` never attempts agent-only
+media (`.docx`, `.pptx`, `.xlsx`, images), which have no machine extractor to
+run; those always need `sidecar --register`. The `pdf` extra is a hard
+requirement only when the tree actually contains PDFs. A missing CAD/BIM
+backend (`cad` / `bim` extra, or a DWG converter on `PATH`) is soft: the file
+gets a `backend-missing` guidance stub that self-heals once the backend is
+installed. `sidecar --list --json` reports per-suffix availability under
+`backends`.
 
 | Flag | Default | Purpose |
 | --- | --- | --- |
