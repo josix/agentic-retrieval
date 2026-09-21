@@ -1018,9 +1018,11 @@ def _sidecar_state_line(state: Dict[str, Any]) -> str:
         return f"{state['rel']}: outdated -> source changed, needs re-extraction"
     if label == "stub":
         return f"{state['rel']}: stub ({state['reason']}) -> needs transcript"
+    # Page-less formats (CAD/BIM summaries) have no page count worth showing.
+    pages = f" ({state['pages']} pages)" if state["pages"] else ""
     if label == "agent-authored":
-        return f"{state['rel']}: agent-authored ({state['pages']} pages)"
-    return f"{state['rel']}: ok ({state['pages']} pages)"
+        return f"{state['rel']}: agent-authored{pages}"
+    return f"{state['rel']}: ok{pages}"
 
 
 def _cmd_sidecar_list(args: argparse.Namespace, root: Path) -> int:
@@ -1080,7 +1082,8 @@ def _cmd_sidecar_register(args: argparse.Namespace, root: Path) -> int:
     manifest_entries = extractors.load_manifest(root).get("entries", {})
     rel = source_path.resolve().relative_to(root.resolve()).as_posix()
     pages = manifest_entries.get(rel, {}).get("pages", 0)
-    if pages == 0:
+    paged = source_path.suffix.lower() not in extractors.CAD_EXTENSIONS
+    if pages == 0 and paged:
         print(
             "note: no '## Page N' headings found in the transcript - page "
             "breadcrumbs will be absent from search-hit context",
@@ -1090,7 +1093,7 @@ def _cmd_sidecar_register(args: argparse.Namespace, root: Path) -> int:
     if args.json:
         print(json.dumps({"source": rel, "sidecar": sidecar.docid, "pages": pages}))
     else:
-        print(f"{rel} -> {sidecar.docid} ({pages} pages)")
+        print(f"{rel} -> {sidecar.docid}" + (f" ({pages} pages)" if paged else ""))
         print("reindex to pick up this sidecar: `retrieval index` (or just query)")
     return 0
 
