@@ -221,7 +221,8 @@ def _dxf_dimensions(msp: Any) -> str:
     for e in msp.query("DIMENSION"):
         try:
             measured = e.get_measurement()
-            measured = _num(measured) if isinstance(measured, (int, float)) else str(measured)
+            # Ordinate dimensions return a point, not a length: no scalar to report.
+            measured = _num(measured) if isinstance(measured, (int, float)) else "n/a (ordinate)"
         except Exception:  # noqa: BLE001 - malformed dimension geometry
             measured = "n/a"
         override = e.dxf.get("text", "")
