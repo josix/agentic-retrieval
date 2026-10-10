@@ -16,7 +16,7 @@ consumers must verify each span against the live source before relying on it.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from retrieval.document import SearchHit
 from retrieval.fusion import reciprocal_rank_fusion
@@ -47,6 +47,7 @@ class ConsolidatedHit:
     agreement: int = 0
     confidence: str = "low"
     contributors: List[dict] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 def _ordered_retriever_names(names) -> List[str]:
@@ -140,6 +141,21 @@ def _canonical_context(group: List[SearchHit], ordered_names: List[str],
         if hit is not None and hit.context:
             return hit.context
     return ""
+
+
+def _canonical_metadata(group: List[SearchHit], canonical: SearchHit,
+                        ordered_names: List[str],
+                        retriever_of: Dict[int, str]) -> Dict[str, Any]:
+    """Canonical ``metadata``: the canonical member's, else the first non-empty
+    member's in fixed canonical retriever order, else ``{}``."""
+    if canonical.metadata:
+        return dict(canonical.metadata)
+    by_name = {retriever_of[id(hit)]: hit for hit in group}
+    for name in ordered_names:
+        hit = by_name.get(name)
+        if hit is not None and hit.metadata:
+            return dict(hit.metadata)
+    return {}
 
 
 def _confidence_for(agreement: int, provenance: List[str]) -> str:
@@ -268,6 +284,7 @@ def _assemble_consolidated_hits(fused, groups, rank_lookup, ordered_names, retri
                 agreement=agreement,
                 confidence=_confidence_for(agreement, provenance),
                 contributors=contributors,
+                metadata=_canonical_metadata(group, canonical, ordered_names, retriever_of),
             )
         )
 

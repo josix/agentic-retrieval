@@ -1,0 +1,38 @@
+# Traditional Chinese translation sample for tests.
+msgid ""
+msgstr ""
+"Project-Id-Version: Python 3.14\n"
+"Language: zh_TW\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+
+#: ../../library/stdtypes.rst:10
+msgid "Iterator Types"
+msgstr "疊代器型別"
+
+#: ../../library/stdtypes.rst:20
+msgid ""
+"Python supports a concept of iteration over containers. This is "
+"implemented using two distinct methods."
+msgstr ""
+"Python 支援對容器進行疊代的概念。這是"
+"透過兩個不同的方法來實作的。"
+
+#: ../../library/functions.rst:5
+#, fuzzy
+msgid "Return a new \"frozenset\" object.\nSee also :class:`set`."
+msgstr "回傳一個新的 frozenset 物件，參見\\ :class:`set`。"
+
+#: ../../library/logging.rst:30
+msgid "Logging configuration for the root logger"
+msgstr ""
+
+msgctxt "decorator"
+msgid "wrapper"
+msgstr "包裝器"
+
+msgid "One file"
+msgid_plural "%d files"
+msgstr[0] "%d 個檔案"
+
+#~ msgid "Obsolete garbage collector entry"
+#~ msgstr "已廢棄的垃圾回收器項目"

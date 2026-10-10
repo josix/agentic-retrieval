@@ -89,5 +89,16 @@ class TestBM25Tokenizer(unittest.TestCase):
         self.assertEqual(restored.tokenizer, "plain")
 
 
+class TestBM25Cjk(unittest.TestCase):
+    def test_chinese_query_ranking_and_roundtrip(self) -> None:
+        docs = ["疊代器型別 Iterator Types", "日誌設定 logging configuration"]
+        index = BM25Index(tokenizer="cjk")
+        index.fit(docs)
+        self.assertEqual(index.query("疊代器")[0][0], 0)
+        restored = BM25Index.from_dict(index.to_dict())
+        self.assertEqual(restored.tokenizer, "cjk")
+        self.assertEqual(restored.query("日誌設定")[0][0], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

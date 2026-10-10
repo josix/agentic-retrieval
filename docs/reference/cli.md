@@ -37,6 +37,7 @@ Build and persist an index for a project root.
 | --- | --- | --- |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to index |
 | `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid,treesitter}` | **`all`** | Retriever(s) to build |
+| `--tokenizer {plain,code,cjk}` | `plain` (or the `--auto` pick) | Lexical tokenizer. `code` adds identifier subtokens; `cjk` emits character bigrams for Chinese/Japanese/Korean runs (use for PO translation memories). Applies to `lexical`, `treesitter` and the hybrid lexical arm; `pi-serini` ignores it. Persisted and sticky like the other hyperparameters. `--auto` picks `cjk` when CJK characters are at least 10% of word characters |
 | `--force` | off | Rebuild even if a fresh (non-stale) cache already exists |
 | `--no-pdf` | off | Exclude PDFs and every other sidecar-routed media suffix (captions, docx/pptx/xlsx/images, audio/video) from discovery — an escape hatch for the default auto-activated sidecar-extraction pipeline (see [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)). Persisted in the cache's meta, so it's sticky across later flag-less `index`/`query` calls |
 | `--allow-large-context` | off | Skip the `lexical+ctx` large-corpus guard (warns above 500 chunks, refuses above 2000 without this flag — each chunk costs one LLM call at index time) |
@@ -316,6 +317,14 @@ argument-parsing error
   unchanged from before consolidated mode existed. **Breaking change from
   0.2.0**: `results` used to be a flat list of docid strings; it is now a
   list of objects — see [changelog](../changelog.md).
+- Record-loader hits (e.g. `.po` entries; see [Customize indexing](../how-to/customize-indexing.md#po-files-translation-memory)):
+  both JSON shapes gain an optional `metadata` object (`kind`, `msgid`,
+  `msgstr`, `fuzzy`, `translated`, `line`, `references`, ...); it is omitted
+  for every other hit. In text mode, each such hit is followed by indented
+  `    label: value` detail lines chosen by its loader; for PO these are
+  `    msgid: ...` / `    msgstr: ...` (`(untranslated)` and a
+  `[fuzzy]` tag where applicable) — consumers that read "first token = path"
+  should skip lines starting with spaces.
 - `query --output PATH` (consolidated mode only): also writes the
   `--json` envelope to `PATH`.
 - `stats`: a fixed set of `key: value` lines to stdout.

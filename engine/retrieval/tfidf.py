@@ -9,11 +9,25 @@ corpus is still returned, with zero-overlap documents scored 0.0.
 
 import math
 import re
+import unicodedata
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 #: Supported tokenizer modes (see ``tokenize``).
-TOKENIZER_MODES = ("plain", "code")
+TOKENIZER_MODES = ("plain", "code", "cjk")
+
+#: Character ranges treated as CJK by ``mode="cjk"``: Hiragana/Katakana,
+#: Bopomofo (used in zh_TW), CJK Ext A + Unified, Hangul syllables + CJK
+#: Compatibility Ideographs, and CJK Ext B-F.
+_CJK_CHARS = (
+    "\u3040-\u309f\u30a0-\u30ff"
+    "\u3100-\u312f\u31a0-\u31bf"
+    "\u3400-\u4dbf\u4e00-\u9fff"
+    "\uac00-\ud7af\uf900-\ufaff"
+    "\U00020000-\U0002ebef"
+)
+_CJK_RUN_RE = re.compile(f"[{_CJK_CHARS}]+")
+_CJK_CHAR_RE = re.compile(f"[{_CJK_CHARS}]")
 
 #: Splits an identifier into subtokens on separators (``_``, ``-``, ``.``) and
 #: at camelCase/PascalCase boundaries (lower-to-upper, and the last upper of
@@ -33,11 +47,18 @@ def tokenize(text: str, mode: str = "plain") -> List[str]:
     only when splitting actually yields >=2 non-empty parts, and never
     re-emitting a subtoken identical to the whole token (so a
     non-splitting token like ``"chunk"`` isn't duplicated).
+    ``mode="cjk"`` NFKC-normalizes and lowercases, then emits overlapping
+    character bigrams for each CJK run (the single character for a run of
+    length 1) and one ``\\w+`` token per non-CJK segment, e.g.
+    ``"使用 CPU 運算"`` -> ``["使用", "cpu", "運算"]``. ASCII-only text
+    tokenizes exactly like ``"plain"``.
     """
     if mode not in TOKENIZER_MODES:
         raise ValueError(f"unknown tokenizer mode {mode!r}; choose from {TOKENIZER_MODES}")
     if mode == "plain":
         return re.findall(r"\w+", text.lower())
+    if mode == "cjk":
+        return _tokenize_cjk(text)
 
     # Case-sensitive extraction first: camelCase/PascalCase boundaries only
     # exist in the original casing, so lowercasing up front (as "plain" does)
@@ -54,6 +75,41 @@ def tokenize(text: str, mode: str = "plain") -> List[str]:
             if lowered != whole:
                 tokens.append(lowered)
     return tokens
+
+
+def _split_cjk_word(word: str) -> List[str]:
+    """Split one word: CJK runs become bigrams (or a single char), the rest stays whole."""
+    tokens: List[str] = []
+    pos = 0
+    for run in _CJK_RUN_RE.finditer(word):
+        if run.start() > pos:
+            tokens.append(word[pos : run.start()])
+        chars = run.group()
+        if len(chars) == 1:
+            tokens.append(chars)
+        else:
+            tokens.extend(chars[i : i + 2] for i in range(len(chars) - 1))
+        pos = run.end()
+    if pos < len(word):
+        tokens.append(word[pos:])
+    return tokens
+
+
+def _tokenize_cjk(text: str) -> List[str]:
+    tokens: List[str] = []
+    for word in re.findall(r"\w+", unicodedata.normalize("NFKC", text).lower()):
+        tokens.extend(_split_cjk_word(word))
+    return tokens
+
+
+def cjk_fraction(texts: Iterable[str]) -> float:
+    """Share of word characters (``\\w``) in *texts* that are CJK; 0.0 if none."""
+    cjk = 0
+    word = 0
+    for text in texts:
+        cjk += len(_CJK_CHAR_RE.findall(text))
+        word += len(re.findall(r"\w", text))
+    return cjk / word if word else 0.0
 
 
 def _doc_weights(tokens: List[str], idf: Dict[str, float]) -> Dict[str, float]:

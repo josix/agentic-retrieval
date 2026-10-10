@@ -8,7 +8,7 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from retrieval.tfidf import TfidfIndex, tokenize  # noqa: E402
+from retrieval.tfidf import TOKENIZER_MODES, TfidfIndex, cjk_fraction, tokenize  # noqa: E402
 
 
 class TestTokenize(unittest.TestCase):
@@ -134,6 +134,47 @@ class TestTfidfTokenizer(unittest.TestCase):
         del data["tokenizer"]
         restored = TfidfIndex.from_dict(data)
         self.assertEqual(restored.tokenizer, "plain")
+
+
+class TestTokenizeCjkMode(unittest.TestCase):
+    def test_registered(self) -> None:
+        self.assertIn("cjk", TOKENIZER_MODES)
+
+    def test_mixed_text_bigrams_and_words(self) -> None:
+        self.assertEqual(tokenize("使用 CPU 運算", "cjk"), ["使用", "cpu", "運算"])
+        self.assertEqual(tokenize("使用CPU運算", "cjk"), ["使用", "cpu", "運算"])
+
+    def test_bigrams_and_single_char_run(self) -> None:
+        self.assertEqual(tokenize("疊代器", "cjk"), ["疊代", "代器"])
+        self.assertEqual(tokenize("類", "cjk"), ["類"])
+
+    def test_ascii_matches_plain(self) -> None:
+        text = "Hello World_x foo-bar 42"
+        self.assertEqual(tokenize(text, "cjk"), tokenize(text, "plain"))
+
+    def test_fullwidth_latin_folded_and_punctuation_dropped(self) -> None:
+        self.assertEqual(tokenize("ＣＰＵ「使用」，。", "cjk"), ["cpu", "使用"])
+
+    def test_katakana_and_extension_a(self) -> None:
+        self.assertEqual(tokenize("カタカナ", "cjk"), ["カタ", "タカ", "カナ"])
+        self.assertEqual(tokenize("\u3400\u3401", "cjk"), ["\u3400\u3401"])
+
+    def test_plain_mode_still_one_token_per_sentence(self) -> None:
+        self.assertEqual(tokenize("疊代器型別", "plain"), ["疊代器型別"])
+
+    def test_cjk_fraction(self) -> None:
+        self.assertEqual(cjk_fraction(["abc"]), 0.0)
+        self.assertEqual(cjk_fraction([]), 0.0)
+        self.assertAlmostEqual(cjk_fraction(["使用 CPU"]), 0.4)
+
+    def test_index_ranks_chinese_doc_and_roundtrips(self) -> None:
+        docs = ["疊代器型別 Iterator Types", "logging configuration root logger"]
+        index = TfidfIndex(tokenizer="cjk")
+        index.fit(docs)
+        self.assertEqual(index.query("疊代器")[0][0], 0)
+        restored = TfidfIndex.from_dict(index.to_dict())
+        self.assertEqual(restored.tokenizer, "cjk")
+        self.assertEqual(restored.query("疊代器")[0][0], 0)
 
 
 if __name__ == "__main__":

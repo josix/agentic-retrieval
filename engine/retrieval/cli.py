@@ -57,7 +57,9 @@ from retrieval.project_loader import (
     load_ast_chunk_documents,
     load_chunk_documents,
 )
+from retrieval.record_loaders import detail_lines
 from retrieval.retrievers import PiSeriniRetriever, Retriever, build_retriever, resolve_ctor_kwargs
+from retrieval.tfidf import TOKENIZER_MODES
 
 _RETRIEVER_CHOICES = (
     "lexical", "lexical+ctx", "turbovec", "pi-serini", "hybrid", "treesitter",
@@ -119,7 +121,13 @@ def _build_parser() -> argparse.ArgumentParser:
     index_parser.add_argument("--ast-max-chars", type=int, default=None)
     index_parser.add_argument("--bm25-k1", type=float, default=None)
     index_parser.add_argument("--bm25-b", type=float, default=None)
-    index_parser.add_argument("--tokenizer", choices=["plain", "code"], default=None)
+    index_parser.add_argument(
+        "--tokenizer",
+        choices=list(TOKENIZER_MODES),
+        default=None,
+        help="lexical tokenizer: plain (default), code (identifier subtokens), "
+        "cjk (character bigrams for Chinese/Japanese/Korean text, e.g. PO files)",
+    )
     index_parser.add_argument("--bit-width", type=int, default=None)
     index_parser.add_argument(
         "--embed-model", default=None, help="turbovec/hybrid embedding model name"
@@ -637,19 +645,27 @@ def _load_or_rebuild(
     return retriever
 
 
+def _with_metadata(out: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach ``metadata`` to a JSON hit only when non-empty (keeps output
+    for hits without record metadata byte-identical)."""
+    if metadata:
+        out["metadata"] = metadata
+    return out
+
+
 def _hit_to_json(hit: SearchHit) -> Dict[str, Any]:
-    return {
+    return _with_metadata({
         "docid": hit.docid,
         "path": hit.source_path,
         "start_line": hit.start_line,
         "end_line": hit.end_line,
         "rank": hit.rank,
         "context": hit.context,
-    }
+    }, hit.metadata)
 
 
 def _consolidated_hit_to_json(hit: ConsolidatedHit) -> Dict[str, Any]:
-    return {
+    return _with_metadata({
         "docid": hit.docid,
         "path": hit.source_path,
         "start_line": hit.start_line,
@@ -661,7 +677,7 @@ def _consolidated_hit_to_json(hit: ConsolidatedHit) -> Dict[str, Any]:
         "agreement": hit.agreement,
         "confidence": hit.confidence,
         "contributors": hit.contributors,
-    }
+    }, hit.metadata)
 
 
 def _parse_weights(weights_arg: Optional[str]) -> Optional[Dict[str, float]]:
@@ -734,6 +750,8 @@ def _print_consolidated_text(consolidated: Dict[str, Any]) -> None:
             f"[score={hit.score:.4f} agree={hit.agreement}/{len(consolidated['retrievers'])} "
             f"conf={hit.confidence}  via {via}]  {hit.context}".rstrip()
         )
+        for detail in detail_lines(hit.metadata):
+            print(detail)
 
 
 def _write_output(output_path: Optional[str], envelope: Dict[str, Any]) -> None:
@@ -774,6 +792,8 @@ def _cmd_query(args: argparse.Namespace) -> int:
     else:
         for hit in hits:
             print(f"{hit.source_path}:{hit.start_line}-{hit.end_line}")
+            for detail in detail_lines(hit.metadata):
+                print(detail)
     return 0
 
 
@@ -861,13 +881,17 @@ def _cmd_tune(args: argparse.Namespace) -> int:
                 "p10_chunk_tokens": signals.p10_chunk_tokens,
                 "p50_chunk_tokens": signals.p50_chunk_tokens,
                 "p90_chunk_tokens": signals.p90_chunk_tokens,
+                "cjk_fraction": signals.cjk_fraction,
             },
             "params": params,
             "warning": warning,
         }
         print(json.dumps(envelope))
         return 0
-    print(f"signals: n_files={signals.n_files} code_fraction={signals.code_fraction:.3f}")
+    print(
+        f"signals: n_files={signals.n_files} code_fraction={signals.code_fraction:.3f} "
+        f"cjk_fraction={signals.cjk_fraction:.3f}"
+    )
     print(
         f"         n_chunks={signals.n_chunks} "
         f"mean_chunk_tokens={signals.mean_chunk_tokens} "

@@ -29,6 +29,10 @@ A chunk-level equivalent that indexes the invoking project's own files
 uses a cheap deterministic heuristic contextualizer
 (`retrieval/contextualizer.py`) instead of an LLM call.
 
+The default tokenizer is `\w+`, which keeps a Chinese sentence as a single
+token; pass `--tokenizer cjk` for CJK text (see the translation-memory section
+below).
+
 ## When to use it (vs turbovec / pi-serini)
 
 **Strengths:**
@@ -149,6 +153,24 @@ PY
 
 Or via the registry: `from retrieval.retrievers import build_retriever;
 build_retriever("lexical")` / `build_retriever("lexical+ctx")`.
+
+## Translation memory for gettext PO projects
+
+The default `\w+` tokenizer keeps a whole Chinese sentence as one token, so
+use `--tokenizer cjk` (character bigrams for CJK runs, normal words for the
+rest) for Chinese or mixed zh/en corpora. `.po` files are indexed one entry
+per Document with `metadata` (`msgid`, `msgstr`, `fuzzy`, `translated`,
+`line`, `references`):
+
+```bash
+retrieval index --root <po-repo> --retriever lexical --tokenizer cjk
+retrieval query "疊代器" --root <po-repo> --retriever lexical --top-k 10 --json \
+  | jq '.results[] | select(.metadata.translated and (.metadata.fuzzy|not))
+        | {path, start_line, msgid: .metadata.msgid, msgstr: .metadata.msgstr}'
+```
+
+Untranslated and fuzzy entries are indexed but flagged; filter on
+`metadata.translated` / `metadata.fuzzy`.
 
 ## Customizing file discovery
 

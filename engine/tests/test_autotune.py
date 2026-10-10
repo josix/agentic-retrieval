@@ -18,7 +18,12 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from retrieval.autotune import CorpusSignals, collect_signals, resolve_params  # noqa: E402
+from retrieval.autotune import (  # noqa: E402
+    CorpusSignals,
+    _decide_tokenizer,
+    collect_signals,
+    resolve_params,
+)
 
 
 def _write(path: pathlib.Path, content: str = "") -> None:
@@ -229,6 +234,23 @@ class TestAnchorSyntheticCorpus(unittest.TestCase):
         self.assertEqual(params["bm25_b"], 0.75)
         self.assertEqual(params["code_chars"], 1200)
         self.assertEqual(params["bit_width"], 4)
+
+
+class TestCjkTokenizerSelection(unittest.TestCase):
+    def test_decide_tokenizer(self) -> None:
+        self.assertEqual(_decide_tokenizer(0.0, 0.5), "cjk")
+        self.assertEqual(_decide_tokenizer(0.5, 0.0), "code")
+        self.assertEqual(_decide_tokenizer(0.5, 0.5), "cjk")
+        self.assertEqual(_decide_tokenizer(0.0, 0.0), "plain")
+
+    def test_po_corpus_selects_cjk(self) -> None:
+        fixture = pathlib.Path(__file__).resolve().parent / "fixtures" / "po" / "sample.po"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            _write(root / "sample.po", fixture.read_text(encoding="utf-8"))
+            signals = collect_signals(root)
+            self.assertGreaterEqual(signals.cjk_fraction, 0.1)
+            self.assertEqual(resolve_params(signals)["tokenizer"], "cjk")
 
 
 if __name__ == "__main__":

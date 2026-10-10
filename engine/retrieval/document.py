@@ -15,10 +15,14 @@ fields at their defaults, preserving backward compatibility.
 ``baz`` nested in class ``Bar``) set by AST-boundary chunking (see
 ``retrieval.ast_chunker``); it defaults to ``""`` for every other loader,
 preserving backward-compatible positional construction.
+
+``metadata`` is an optional, loader-specific mapping (for example the
+msgid/msgstr/fuzzy/translated fields set by ``retrieval.po_loader``). Values
+must be JSON-safe; it is empty for every non-PO loader.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -30,6 +34,7 @@ class Document:
     start_line: Optional[int] = None
     end_line: Optional[int] = None
     context: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -42,3 +47,4 @@ class SearchHit:
     end_line: Optional[int]
     rank: int
     context: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)

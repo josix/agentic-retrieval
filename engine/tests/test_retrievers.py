@@ -307,5 +307,42 @@ class TestTreeSitterRetriever(unittest.TestCase):
         self.assertEqual(hits[0].context, "")
 
 
+class TestRetrieverMetadata(unittest.TestCase):
+    def _docs(self):
+        return [
+            Document("d1", "iterator types 疊代器", source_path="a.po", start_line=1, end_line=2,
+                     metadata={"kind": "po_entry", "msgid": "Iterator Types"}),
+            Document("d2", "logging root", source_path="b.po", start_line=1, end_line=2),
+        ]
+
+    def test_hits_carry_metadata(self) -> None:
+        r = LexicalRetriever(tokenizer="cjk")
+        r.index(self._docs())
+        hit = r.search_detailed("疊代器", top_k=1)[0]
+        self.assertEqual(hit.metadata["msgid"], "Iterator Types")
+        plain = r.search_detailed("logging root", top_k=1)[0]
+        self.assertEqual(plain.metadata, {})
+        self.assertNotIn("metadata", r.to_dict()["units"][1])
+
+    def test_roundtrip_and_old_cache_without_key(self) -> None:
+        r = LexicalRetriever(tokenizer="cjk")
+        r.index(self._docs())
+        data = r.to_dict()
+        restored = LexicalRetriever.from_dict(data)
+        top = restored.search_detailed("疊代器", top_k=1)[0]
+        self.assertEqual(top.metadata["kind"], "po_entry")
+        for unit in data["units"]:
+            unit.pop("metadata", None)
+        old = LexicalRetriever.from_dict(data)
+        self.assertEqual(old.search_detailed("疊代器", top_k=1)[0].metadata, {})
+
+    def test_treesitter_and_contextual_preserve_metadata(self) -> None:
+        contextual = ContextualLexicalRetriever(contextualizer=lambda t: "ctx")
+        for retriever in (TreeSitterRetriever(), contextual):
+            retriever.index(self._docs())
+            hit = retriever.search_detailed("iterator types", top_k=1)[0]
+            self.assertEqual(hit.metadata["msgid"], "Iterator Types")
+
+
 if __name__ == "__main__":
     unittest.main()

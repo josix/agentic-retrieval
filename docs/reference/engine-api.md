@@ -120,6 +120,7 @@ whole-file and raw-`Chunk` use cases respectively.
 - [`retrieval.retrievers`](api/retrievers.md)
 - [`retrieval.document`](api/document.md)
 - [`retrieval.project_loader`](api/project_loader.md)
+- [`retrieval.record_loaders`](api/record_loaders.md)
 - [`retrieval.fusion`](api/fusion.md)
 - [Contextualizers](api/contextualizers.md) (`retrieval.contextualizer` +
   `retrieval.llm_contextualizer`)

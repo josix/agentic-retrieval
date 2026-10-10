@@ -151,12 +151,28 @@ anything you already know about the corpus or the coming queries:
 | You know / observe | Pass on `index` |
 | --- | --- |
 | Corpus is mostly code, or mostly prose (overriding the auto guess) | `--tokenizer code` / `--tokenizer plain` |
+| Corpus is Chinese/Japanese/Korean text or PO translations | `--tokenizer cjk` |
 | Queries will be long/verbose natural language | `--bm25-k1 1.8` (raise term saturation) |
 | Chunk lengths are uniform / wildly varied | `--bm25-b 0.3` / `--bm25-b 1.0` |
 | Functions or sections are being split mid-definition | `--code-chars` / `--target-chars` / `--ast-max-chars` (larger) |
 | Recall matters more than memory (small corpus) | `--bit-width 4` |
 | A specific embedding model fits the domain | `--embed-model <name>` |
 | Long documents indexed as few big chunks | `--lucene-k1 25 --lucene-b 1` |
+
+### Translation memory (PO projects)
+
+`.po` files are indexed one entry per Document with `metadata` (`msgid`,
+`msgstr`, `fuzzy`, `translated`, `line`, `references`). Use the `cjk`
+tokenizer and the lexical strategy on both commands, then filter in JSON:
+
+```bash
+retrieval index --root <po-repo> --retriever lexical --tokenizer cjk
+retrieval query "疊代器" --root <po-repo> --retriever lexical --top-k 10 --json \
+  | jq '.results[] | select(.metadata.translated and (.metadata.fuzzy|not))
+        | {path, start_line, msgid: .metadata.msgid, msgstr: .metadata.msgstr}'
+```
+
+Text mode prints indented `msgid:` / `msgstr:` lines under each PO hit.
 
 At **query time**, pass `--auto` to resolve `top_k` from the index's
 persisted corpus stats, or an explicit `--top-k N` when you know how many

@@ -83,6 +83,8 @@ nav:
           - retrievers: reference/api/retrievers.md
           - document: reference/api/document.md
           - project_loader: reference/api/project_loader.md
+          - po_loader: reference/api/po_loader.md
+          - record_loaders: reference/api/record_loaders.md
           - extractors: reference/api/extractors.md
           - fusion: reference/api/fusion.md
           - consolidation: reference/api/consolidation.md

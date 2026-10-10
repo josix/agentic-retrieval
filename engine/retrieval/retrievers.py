@@ -55,16 +55,19 @@ def _units_from_documents(documents: List[Document]) -> List[Dict[str, Any]]:
     """Build the ``{docid, source_path, start_line, end_line}`` unit list a
     retriever tracks alongside its index, straight from each Document's span
     metadata (never parsed back out of the docid string)."""
-    return [
-        {
+    units = []
+    for d in documents:
+        unit: Dict[str, Any] = {
             "docid": d.docid,
             "source_path": d.source_path,
             "start_line": d.start_line,
             "end_line": d.end_line,
             "context": d.context,
         }
-        for d in documents
-    ]
+        if d.metadata:
+            unit["metadata"] = dict(d.metadata)
+        units.append(unit)
+    return units
 
 
 def _hits_from_units(units: List[Dict[str, Any]], ranked_idx: List[int]) -> List[SearchHit]:
@@ -77,6 +80,7 @@ def _hits_from_units(units: List[Dict[str, Any]], ranked_idx: List[int]) -> List
             end_line=units[idx]["end_line"],
             rank=rank,
             context=units[idx].get("context", ""),
+            metadata=dict(units[idx].get("metadata") or {}),
         )
         for rank, idx in enumerate(ranked_idx)
     ]
@@ -218,6 +222,7 @@ class ContextualLexicalRetriever(LexicalRetriever):
                 start_line=d.start_line,
                 end_line=d.end_line,
                 context=d.context,
+                metadata=d.metadata,
             )
             for d in documents
         ]
@@ -249,6 +254,7 @@ class TreeSitterRetriever(LexicalRetriever):
                 start_line=d.start_line,
                 end_line=d.end_line,
                 context=d.context,
+                metadata=d.metadata,
             )
             for d in documents
         ]
@@ -479,6 +485,7 @@ class PiSeriniRetriever:
                     start_line=unit["start_line"],
                     end_line=unit["end_line"],
                     rank=rank,
+                    metadata=dict(unit.get("metadata") or {}),
                 )
             )
         return results
@@ -601,6 +608,7 @@ class HybridRetriever:
                     start_line=unit["start_line"],
                     end_line=unit["end_line"],
                     rank=rank,
+                    metadata=dict(unit.get("metadata") or {}),
                 )
             )
         return results

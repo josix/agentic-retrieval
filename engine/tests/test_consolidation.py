@@ -150,5 +150,21 @@ class TestConsolidate(unittest.TestCase):
         self.assertEqual([h.rank for h in result], [1, 2])
 
 
+class TestConsolidatedMetadata(unittest.TestCase):
+    def test_canonical_metadata_and_fallback(self) -> None:
+        with_meta = _hit("a.po:1-2", "a.po", 1, 2, rank=0)
+        with_meta.metadata = {"kind": "po_entry", "msgid": "x"}
+        without = _hit("a.po:1-2", "a.po", 1, 2, rank=0)
+        result = consolidate({"lexical": [with_meta], "treesitter": [without]})
+        self.assertEqual(result[0].metadata["msgid"], "x")
+        # canonical (lexical) has none: fall back to another member's
+        result = consolidate({"lexical": [without], "treesitter": [with_meta]})
+        self.assertEqual(result[0].metadata["msgid"], "x")
+
+    def test_empty_when_no_member_has_metadata(self) -> None:
+        result = consolidate({"lexical": [_hit("a:1-2", "a", 1, 2, rank=0)]})
+        self.assertEqual(result[0].metadata, {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,11 @@ that look like secrets by name. PDFs are discovered like any other file
 imports its optional ``pypdf`` backend, so this module's offline-by-default
 guarantee is unaffected by whether that backend is installed.
 
+Record-oriented formats (suffixes registered in ``retrieval.record_loaders``,
+e.g. ``.po`` via ``retrieval.po_loader``) are discovered too; the
+chunk-granularity loaders hand them to their record loader so each record
+becomes its own Document. ``.pot`` templates are deliberately not discovered.
+
 A file is eligible for discovery if its suffix is in ``DEFAULT_EXTENSIONS``
 *or* its basename case-insensitively matches ``DEFAULT_INCLUDE_BASENAMES``
 (well-known extensionless project files such as ``Dockerfile``, ``Makefile``,
@@ -26,7 +31,7 @@ import os
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from retrieval import extractors
+from retrieval import extractors, record_loaders
 from retrieval.ast_chunker import chunk_code, language_for_path
 from retrieval.chunker import DEFAULT_POLICY, Chunk, ChunkingPolicy, chunk_document
 from retrieval.document import Document
@@ -76,6 +81,7 @@ DEFAULT_EXTENSIONS = frozenset(
         ".pl",
     }
     | extractors.EXTRACTABLE_EXTENSIONS
+    | record_loaders.registered_suffixes()
 )
 
 DEFAULT_EXCLUDE_DIRS = frozenset(
@@ -329,6 +335,14 @@ def load_chunks(
     return chunks
 
 
+def _record_documents(document: Document) -> Optional[List[Document]]:
+    """Per-record Documents when a registered record loader owns *document*'s suffix, else None."""
+    loader = record_loaders.lookup(document.docid)
+    if loader is None:
+        return None
+    return loader.load(document.docid, document.text, document.url)
+
+
 def load_chunk_documents(
     root: "os.PathLike[str] | str",
     *,
@@ -343,7 +357,10 @@ def load_chunk_documents(
     ``source_path``/``start_line``/``end_line`` set from the chunk's span —
     this is what the production retrievers (see ``retrieval/retrievers.py``)
     index so search results can point a coding agent at an exact
-    ``file:line`` location. A file with only blank content yields no chunks
+    ``file:line`` location. Files whose suffix has a registered record loader
+    (see ``retrieval.record_loaders``; ``.po`` is built in) are the exception:
+    the loader emits one Document per record, with per-record ``metadata``.
+    A file with only blank content yields no chunks
     and therefore no Documents. *policy* (default ``DEFAULT_POLICY``,
     reproducing today's flat 400-char chunking) picks each file's
     ``target_chars`` bucket by suffix; **kw is forwarded only to
@@ -352,6 +369,10 @@ def load_chunk_documents(
     resolved_policy = policy or DEFAULT_POLICY
     documents: List[Document] = []
     for document in load_documents(root, **kw):
+        records = _record_documents(document)
+        if records is not None:
+            documents.extend(records)
+            continue
         target_chars = resolved_policy.target_chars_for(document.docid)
         for chunk in chunk_document(document.docid, document.text, target_chars):
             docid = f"{document.docid}:{chunk.start_line}-{chunk.end_line}"
@@ -386,7 +407,8 @@ def load_ast_chunk_documents(
     AST chunking returns no chunks (e.g. a severely broken parse), fall back
     to the line-based ``chunk_document`` — same as ``load_chunk_documents``,
     including *policy*'s ``target_chars_for`` bucket — with an empty
-    ``context``. *policy* defaults to ``DEFAULT_POLICY`` (reproducing
+    ``context``. Files with a registered record loader are routed to it (one
+    Document per record). *policy* defaults to ``DEFAULT_POLICY`` (reproducing
     today's behavior); **kw is forwarded only to ``discover_files``.
 
     A missing ``tree-sitter-language-pack`` install surfaces as a
@@ -397,6 +419,10 @@ def load_ast_chunk_documents(
     resolved_policy = policy or DEFAULT_POLICY
     documents: List[Document] = []
     for document in load_documents(root, **kw):
+        records = _record_documents(document)
+        if records is not None:
+            documents.extend(records)
+            continue
         language = language_for_path(document.docid)
         chunks = (
             chunk_code(document.docid, document.text, language, resolved_policy.ast_max_chars)

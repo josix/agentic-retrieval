@@ -11,6 +11,7 @@ import io
 import json
 import os
 import pathlib
+import shutil
 import sys
 import tempfile
 import time
@@ -23,10 +24,12 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from test_extractors import _PYPDF_INSTALLED, _write_pdf  # noqa: E402
+from test_record_loaders import register_fake_xyz  # noqa: E402
 
 from retrieval import cli, extractors  # noqa: E402
 from retrieval.cli import main  # noqa: E402
-from retrieval.document import Document  # noqa: E402
+from retrieval.consolidation import ConsolidatedHit  # noqa: E402
+from retrieval.document import Document, SearchHit  # noqa: E402
 from retrieval.persistence import compute_fingerprint, index_dir, save_index  # noqa: E402
 from retrieval.project_loader import load_chunk_documents  # noqa: E402
 from retrieval.retrievers import LexicalRetriever  # noqa: E402
@@ -1321,6 +1324,157 @@ class TestSidecarCommand(unittest.TestCase):
             if d.source_path == sidecar_docid and "Welcome slide content" in d.text
         )
         self.assertEqual(doc.context, "Slide 1 — Intro")
+
+
+class TestCliPoTranslationMemory(unittest.TestCase):
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        shutil.copy(_ROOT_DIR / "tests" / "fixtures" / "po" / "sample.po", self.root / "sample.po")
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+        self._project_tmp.cleanup()
+
+    def _index(self) -> str:
+        code, out = _run(
+            ["index", "--root", str(self.root), "--retriever", "lexical", "--tokenizer", "cjk"]
+        )
+        self.assertEqual(code, 0)
+        return out
+
+    def _query_json(self, query: str, *extra: str):
+        code, out = _run(
+            ["query", query, "--root", str(self.root), "--retriever", "lexical",
+             "--top-k", "1", "--json", *extra]
+        )
+        self.assertEqual(code, 0)
+        return json.loads(out)["results"][0]
+
+    def test_index_reports_entries_and_persists_tokenizer(self) -> None:
+        self.assertIn("indexed 6 chunks ->", self._index())
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["hyperparams"]["tokenizer"], "cjk")
+
+    def test_chinese_query_surfaces_msgid_msgstr(self) -> None:
+        self._index()
+        hit = self._query_json("疊代器")
+        self.assertEqual(hit["path"], "sample.po")
+        self.assertEqual(hit["start_line"], 8)
+        self.assertEqual(hit["metadata"]["msgid"], "Iterator Types")
+        self.assertIn("疊代器", hit["metadata"]["msgstr"])
+
+    def test_english_query_hits_untranslated_entry(self) -> None:
+        self._index()
+        hit = self._query_json("logging configuration root logger")
+        self.assertEqual(hit["start_line"], 25)
+        self.assertIs(hit["metadata"]["translated"], False)
+
+    def test_mixed_query_hits_fuzzy_entry(self) -> None:
+        self._index()
+        hit = self._query_json("frozenset 物件")
+        self.assertEqual(hit["start_line"], 20)
+        self.assertIs(hit["metadata"]["fuzzy"], True)
+
+    def test_text_mode_prints_msgid_and_msgstr(self) -> None:
+        self._index()
+        code, out = _run(
+            ["query", "疊代器", "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
+        )
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "sample.po:8-10")
+        self.assertEqual(lines[1], "    msgid: Iterator Types")
+        self.assertEqual(lines[2], "    msgstr: 疊代器型別")
+
+    def test_sticky_tokenizer_on_stale_rebuild(self) -> None:
+        self._index()
+        _bump_mtime(self.root / "sample.po")
+        code, _out = _run(
+            ["query", "疊代器", "--root", str(self.root), "--retriever", "lexical", "--top-k", "1"]
+        )
+        self.assertEqual(code, 0)
+        meta = json.loads((index_dir(self.root) / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["hyperparams"]["tokenizer"], "cjk")
+        data = json.loads((index_dir(self.root) / "lexical.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["bm25"]["tokenizer"], "cjk")
+
+    def test_consolidated_query_includes_metadata(self) -> None:
+        self._index()
+        code, out = _run(
+            ["query", "疊代器", "--root", str(self.root), "--json", "--top-k", "3"]
+        )
+        self.assertEqual(code, 0)
+        results = json.loads(out)["results"]
+        match = [r for r in results if r["path"] == "sample.po" and r["start_line"] == 8]
+        self.assertTrue(match)
+        self.assertEqual(match[0]["metadata"]["msgid"], "Iterator Types")
+
+    def test_tune_json_reports_cjk_fraction(self) -> None:
+        code, out = _run(["tune", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        self.assertGreaterEqual(json.loads(out)["signals"]["cjk_fraction"], 0.1)
+
+
+class TestCliRecordDetails(unittest.TestCase):
+    """Text-mode detail lines for a non-PO record kind (registered fake loader)."""
+
+    def setUp(self) -> None:
+        register_fake_xyz(self)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name
+
+    def _query_text(self, metadata) -> list:
+        hit = SearchHit(
+            docid="data.xyz:1-1",
+            source_path="data.xyz",
+            start_line=1,
+            end_line=1,
+            rank=1,
+            metadata=metadata,
+        )
+        stub = mock.Mock()
+        stub.search_detailed.return_value = [hit]
+        with mock.patch.object(cli, "_load_or_rebuild", return_value=stub):
+            code, out = _run(
+                ["query", "hello", "--root", self.root, "--retriever", "lexical", "--top-k", "1"]
+            )
+        self.assertEqual(code, 0)
+        return out.splitlines()
+
+    def test_consolidated_text_renders_generic_details(self) -> None:
+        hit = ConsolidatedHit(
+            source_path="data.xyz",
+            start_line=1,
+            end_line=1,
+            docid="data.xyz:1-1",
+            context="",
+            score=0.5,
+            rank=1,
+            provenance=["lexical"],
+            metadata={"kind": "xyz_record", "title": "Hello", "lang": "en", "extra": "x"},
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cli._print_consolidated_text(
+                {"skipped": [], "retrievers": ["lexical"], "results": [hit]}
+            )
+        self.assertEqual(buf.getvalue().splitlines()[1:], ["    title: Hello", "    lang: en"])
+
+    def test_single_retriever_text_renders_generic_details(self) -> None:
+        lines = self._query_text({"kind": "xyz_record", "title": "Hello", "lang": "en"})
+        self.assertEqual(lines, ["data.xyz:1-1", "    title: Hello", "    lang: en"])
+
+    def test_hit_without_metadata_prints_no_details(self) -> None:
+        self.assertEqual(self._query_text({}), ["data.xyz:1-1"])
 
 
 if __name__ == "__main__":

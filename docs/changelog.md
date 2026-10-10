@@ -6,6 +6,33 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.12.0 — 2026-10-10
+
+- **\[engine\] Record-loader registry** — new stdlib-only
+  `retrieval.record_loaders`: formats that yield one `Document` per record
+  register a suffix and a `load(docid, text, url)` callable; both
+  chunk-granularity loaders route through it and CLI text mode prints each
+  loader's declared detail lines. The engine core no longer special-cases
+  any format.
+- **\[engine\] Gettext PO loader** (first registered record loader) — new
+  stdlib-only `retrieval.po_loader` turns each `.po` entry into its own `Document` (msgid + msgstr text) with
+  optional `metadata` (source file, line, fuzzy flag, msgid, msgstr,
+  untranslated flag). Fuzzy and untranslated entries are indexed but
+  flagged. `.po` is part of `DEFAULT_EXTENSIONS`; `.pot` is not.
+- **\[engine\] Optional `metadata` field on `Document`** — persisted in
+  caches; old caches without it still load.
+- **\[engine\] `cjk` tokenizer mode** — CJK-aware tokenization so Chinese
+  and mixed Chinese/English queries retrieve relevant entries. The `plain`
+  tokenizer remains the default and is byte-identical.
+- **\[engine\] Autotune picks `cjk`** automatically when the corpus is
+  predominantly CJK text.
+- **\[plugin\] Skills and `/retrieval` command** updated with PO
+  translation-memory usage (index and query a PO repo, get msgid/msgstr
+  pairs back).
+- **\[docs\] Pages updated** — CLI reference, customize-indexing,
+  use-each-retriever, persistence-and-cache, and new `po_loader` and
+  `record_loaders` API reference pages.
+
 ## 0.11.0 — 2026-10-10
 
 - **\[engine\] Caption files (`.srt`/`.vtt`) as tier-1 machine-extracted

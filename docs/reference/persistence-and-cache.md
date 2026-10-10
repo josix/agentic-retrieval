@@ -68,6 +68,11 @@ the `turbovec` slot can go stale and get rebuilt independently of the
 | `file_count` | `int` | Number of distinct source files those chunks came from (`len(set(unit["source_path"] for unit in units))`); usually smaller than `doc_count` once a file yields more than one chunk |
 | `retriever_name` | `str` | The `--retriever` value used to build this cache |
 
+Persisted `units` may carry an optional `metadata` object (for example the
+msgid/msgstr fields of a PO entry); it is absent for non-PO units and for
+caches written before 0.11.0, which load unchanged. The `tokenizer` entry in
+`hyperparams` can be `plain`, `code` or `cjk`.
+
 ## Fingerprint
 
 The fingerprint is a SHA-256 hash computed by `compute_fingerprint(root)`

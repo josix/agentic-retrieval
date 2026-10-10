@@ -27,7 +27,7 @@ Thin dispatcher — invoke the `retrieval` skill and follow its steps exactly.
   single strategy instead (missing extras hard-fail with guidance, exit 1).
   Hyperparameters are the agent's call, made inline on this command:
   `--auto` derives a corpus-calibrated baseline, and explicit flags
-  (`--tokenizer`, `--bm25-k1`, `--bm25-b`, `--code-chars`, `--bit-width`,
+  (`--tokenizer` (`plain`/`code`/`cjk`), `--bm25-k1`, `--bm25-b`, `--code-chars`, `--bit-width`,
   `--embed-model`, `--lucene-k1`, `--lucene-b`, …) override per flag —
   precedence explicit > auto > static default. Decisions persist in each
   cache's meta and survive rebuilds (see `skills/retrieval/SKILL.md`

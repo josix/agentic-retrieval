@@ -9,7 +9,7 @@ and optional per-strategy extras — no global installs, ever.
 
 | Strategy | REGISTRY key | Class | What it is | Extra needed |
 |---|---|---|---|---|
-| Contextual retrieval | `lexical` | `retrieval.retrievers.LexicalRetriever` | TF-IDF + BM25 fused with reciprocal-rank fusion | none (core) |
+| Contextual retrieval | `lexical` | `retrieval.retrievers.LexicalRetriever` | TF-IDF + BM25 fused with reciprocal-rank fusion (`--tokenizer cjk` for Chinese/Japanese/Korean text and PO translation memories) | none (core) |
 | Contextual retrieval + LLM enrichment | `lexical+ctx` | `retrieval.retrievers.ContextualLexicalRetriever` | `LexicalRetriever` over LLM-enriched document text | none (base); `remote` for enrichment |
 | turbovec | `turbovec` | `retrieval.retrievers.TurbovecRetriever` | Dense ANN retrieval over embeddings, quantized with TurboQuant | `turbovec` + `local` |
 | pi-serini | `pi-serini` | `retrieval.retrievers.PiSeriniRetriever` | Lucene BM25 via Pyserini — the reference lexical retriever from the Pi-Serini paper | `pyserini` (+ Java 21 JDK) |
@@ -56,6 +56,19 @@ coding agent chooses which cached strategy fits each query.
 
 As a Claude Code skill, the same flows are driven with `/retrieval`.
 
+### Translation memory for gettext PO projects
+
+`.po` files are indexed one entry per Document (msgid + msgstr, with
+`fuzzy`/`translated` flags in the hit `metadata`), and `--tokenizer cjk`
+makes Chinese or mixed Chinese/English queries match via character bigrams:
+
+```bash
+retrieval index --root <po-repo> --retriever lexical --tokenizer cjk
+retrieval query "疊代器" --root <po-repo> --retriever lexical --top-k 10 --json \
+  | jq '.results[] | select(.metadata.translated and (.metadata.fuzzy|not))
+        | {path, start_line, msgid: .metadata.msgid, msgstr: .metadata.msgstr}'
+```
+
 ## Full documentation
 
 The full Diataxis-organized documentation site lives at
@@ -94,6 +107,8 @@ engine/                               vendored offline-first retrieval engine (a
     retrieval/retrievers.py             LexicalRetriever, ContextualLexicalRetriever, TurbovecRetriever, PiSeriniRetriever, HybridRetriever, TreeSitterRetriever, REGISTRY, build_retriever
     retrieval/document.py               Document record shared by the retrievers
     retrieval/ast_chunker.py            AST-boundary ("cAST") chunking via tree-sitter
+    retrieval/po_loader.py              per-entry gettext .po parser (translation memory Documents with msgid/msgstr metadata)
+    retrieval/record_loaders.py         record-loader registry (suffix -> one Document per record; text-mode detail lines)
     retrieval/project_loader.py         discover_files/load_documents/load_chunks/load_ast_chunk_documents over a project root
     tests/fixtures/                     engineered fixtures for the Routing-chunk contextualization test
 docs/                                  Diataxis-organized MkDocs site (tutorials, how-to, concepts, reference)

@@ -35,12 +35,17 @@ from typing import Any, Dict, List, Optional, Tuple
 from retrieval import extractors, project_loader
 from retrieval.ast_chunker import LANGUAGE_BY_SUFFIX
 from retrieval.chunker import ChunkingPolicy
-from retrieval.tfidf import tokenize
+from retrieval.tfidf import cjk_fraction, tokenize
 
 #: chunk-token p10 below this is flagged (not auto-corrected) by ``tune``:
 #: it usually means chunks are being sliced too finely for BM25/TF-IDF to
 #: carry much signal per chunk.
 _THIN_CHUNK_P10_THRESHOLD = 15
+
+#: CJK-character share of word characters at or above which the ``cjk``
+#: tokenizer is auto-selected (it wins over ``code``: code mode would leave a
+#: whole Chinese sentence as a single token).
+_CJK_TOKENIZER_THRESHOLD = 0.1
 
 
 @dataclass
@@ -61,6 +66,7 @@ class CorpusSignals:
     p10_chunk_tokens: Optional[float] = None
     p50_chunk_tokens: Optional[float] = None
     p90_chunk_tokens: Optional[float] = None
+    cjk_fraction: float = 0.0
 
 
 def _percentile(sorted_values: List[float], pct: float) -> float:
@@ -74,7 +80,9 @@ def _percentile(sorted_values: List[float], pct: float) -> float:
     return sorted_values[lo] * (hi - k) + sorted_values[hi] * (k - lo)
 
 
-def _decide_tokenizer(code_fraction: float) -> str:
+def _decide_tokenizer(code_fraction: float, cjk_fraction: float = 0.0) -> str:
+    if cjk_fraction >= _CJK_TOKENIZER_THRESHOLD:
+        return "cjk"
     return "code" if code_fraction > 0.3 else "plain"
 
 
@@ -253,9 +261,10 @@ def collect_signals(
         return CorpusSignals(n_files=0, ext_histogram={})
 
     pass1_policy = _decide_chunking_policy(code_fraction, median_code_lines)
-    tokenizer_mode = tokenizer_for_pass2 or _decide_tokenizer(code_fraction)
 
     chunk_documents = project_loader.load_chunk_documents(root, policy=pass1_policy, **loader_kw)
+    cjk = cjk_fraction(d.text for d in chunk_documents)
+    tokenizer_mode = tokenizer_for_pass2 or _decide_tokenizer(code_fraction, cjk)
     chunk_token_counts = sorted(len(tokenize(d.text, tokenizer_mode)) for d in chunk_documents)
 
     signals = CorpusSignals(
@@ -265,6 +274,7 @@ def collect_signals(
         code_bytes=code_bytes,
         code_fraction=code_fraction,
         median_code_lines=median_code_lines,
+        cjk_fraction=cjk,
     )
     if not chunk_token_counts:
         return signals
@@ -312,7 +322,7 @@ def resolve_params(
     )
     params: Dict[str, Any] = {
         **policy.to_dict(),
-        "tokenizer": _decide_tokenizer(signals.code_fraction),
+        "tokenizer": _decide_tokenizer(signals.code_fraction, signals.cjk_fraction),
         "bm25_k1": _decide_bm25_k1(signals.code_fraction, signals.p50_chunk_tokens),
         "bm25_b": _decide_bm25_b(
             signals.chunk_token_cv, signals.p50_chunk_tokens, signals.p90_chunk_tokens

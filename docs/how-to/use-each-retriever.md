@@ -40,6 +40,11 @@ project-loader-based snippet, and the LLM-enrichment variant
 (`ContextualLexicalRetriever`) live in
 `skills/lexical-retrieval-usage/SKILL.md`.
 
+For Chinese/Japanese/Korean corpora (for example PO translation memories),
+index with `--tokenizer cjk` so text is matched on character bigrams; the
+`pi-serini` retriever ignores `--tokenizer`. See
+[Customize indexing: PO files](customize-indexing.md#po-files-translation-memory).
+
 ## turbovec — `TurbovecRetriever` (extras: `turbovec` + `local`)
 
 Embeds documents with `sentence-transformers` and ranks by inner-product

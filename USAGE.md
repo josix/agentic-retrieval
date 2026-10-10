@@ -16,3 +16,17 @@ This content has moved to the docs site. See:
   [troubleshooting](docs/reference/troubleshooting.md).
 
 Full site: <https://josix.github.io/agentic-retrieval/>
+
+## Translation memory for gettext PO projects
+
+`.po` files are indexed one entry per Document, and `--tokenizer cjk`
+enables Chinese/mixed queries:
+
+```bash
+retrieval index --root <po-repo> --retriever lexical --tokenizer cjk
+retrieval query "疊代器" --root <po-repo> --retriever lexical --top-k 10 --json \
+  | jq '.results[] | select(.metadata.translated and (.metadata.fuzzy|not))
+        | {path, start_line, msgid: .metadata.msgid, msgstr: .metadata.msgstr}'
+```
+
+See [Customize indexing: PO files](docs/how-to/customize-indexing.md#po-files-translation-memory).

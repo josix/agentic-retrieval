@@ -113,6 +113,90 @@ searched as prose rather than being silently skipped as binary.
   `skills/retrieval/references/office-image-transcripts.md` for the full
   authoring guide.
 
+## PO files (translation memory)
+
+`.po` files are in `DEFAULT_EXTENSIONS` and are not size-chunked: the
+chunk-granularity loaders (`load_chunk_documents`,
+`load_ast_chunk_documents`, hence every CLI strategy) route them to
+`retrieval.po_loader` (the built-in *record loader*, see
+[below](#record-loaders-one-document-per-record)), which emits **one Document
+per entry**. The span
+(`path:start-end`) covers the whole entry block, so it feeds straight into
+`Read`. The header entry and obsolete `#~` entries are skipped; fuzzy and
+untranslated entries are indexed and flagged. `.pot` templates are not
+discovered (they would duplicate every msgid as an untranslated entry).
+
+Design decision: a PO Document's `text` is `msgid` + `msgstr` (plus
+`msgctxt`/`msgid_plural`), so one entry matches both English and Chinese
+queries (cross-lingual); `metadata` keeps them separate for display and
+filtering.
+
+| `metadata` key | Meaning |
+|---|---|
+| `kind` | always `"po_entry"` |
+| `msgid`, `msgstr` | decoded strings (plural forms joined with newlines) |
+| `fuzzy` | entry has the `fuzzy` flag |
+| `translated` | `msgstr` is non-empty (all plural forms for plural entries) |
+| `line` | line of the `msgid` keyword |
+| `references` | `#:` source references |
+| `msgctxt`, `msgid_plural`, `msgstr_plural` | present only when the entry has them |
+
+Chinese text needs the `cjk` tokenizer (the default `\w+` keeps a whole
+Chinese sentence as one token). Build and query with it, then filter
+fuzzy/untranslated hits from the JSON `metadata`:
+
+```bash
+retrieval index --root <po-repo> --retriever lexical --tokenizer cjk
+retrieval query "疊代器" --root <po-repo> --retriever lexical --top-k 10 --json \
+  | jq '.results[] | select(.metadata.translated and (.metadata.fuzzy|not))
+        | {path, start_line, msgid: .metadata.msgid, msgstr: .metadata.msgstr}'
+```
+
+Use `--retriever lexical` on both commands: a consolidated `query` after a
+lexical-only index builds any missing strategy with the `plain` tokenizer.
+Untranslated entries contain only English text and are short, so they can
+rank high for English queries; raise `--top-k` and filter on
+`metadata.translated`. Single-character Chinese queries cannot match inside a
+longer run (bigram indexing). The legacy `load_chunks` path still chunks
+`.po` files by size. Re-index existing projects (and any cache built with
+`--no-pdf` before 0.11.0) to pick up `.po` files.
+
+## Record loaders: one Document per record
+
+Any record-oriented format (CSV glossary, JSONL, SRT-style cues) can be
+indexed per record without touching the engine core. Write a parser module
+and register a suffix:
+
+1. Write a module whose `load(docid, text, url)` returns one `Document` per
+   record. Each needs `docid="{path}:{start}-{end}"`, `source_path`, the
+   line span, and `metadata["kind"]`.
+2. At the end of the module call
+   `record_loaders.register(RecordLoader(kind=..., suffixes=frozenset({".csv"}), load=..., detail_keys=(...)))`.
+   `detail_keys` are the `metadata` keys printed as indented `label: value`
+   lines in CLI text mode; pass `describe=` only for custom formatting, as
+   `retrieval.po_loader` does.
+3. For an in-tree module, add it to `record_loaders.BUILTIN_LOADER_MODULES`.
+   For an out-of-tree module, import it and pass
+   `extensions=DEFAULT_EXTENSIONS | {".csv"}`: `DEFAULT_EXTENSIONS` is
+   computed at first import of `project_loader`, so later registrations are
+   routed but not discovered by default.
+
+`retrieval.po_loader` is the worked example. Translation-specific policy
+(filtering fuzzy entries, assembling few-shot examples) belongs to callers,
+not the engine.
+
+```bash
+PROJECT_ROOT=<project> python - <<'PY'
+import os
+from retrieval import record_loaders
+from retrieval.project_loader import DEFAULT_EXTENSIONS, load_chunk_documents
+import my_csv_loader  # calls record_loaders.register(...) at import
+
+docs = load_chunk_documents(os.environ["PROJECT_ROOT"], extensions=DEFAULT_EXTENSIONS | {".csv"})
+print(len(docs), sorted(record_loaders.registered_suffixes()))
+PY
+```
+
 ## Extend, don't replace
 
 Extend a `DEFAULT_*` constant with `|` rather than replacing it, so you keep

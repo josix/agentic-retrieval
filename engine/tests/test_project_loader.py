@@ -561,5 +561,42 @@ class TestMediaTierDiscovery(unittest.TestCase):
             self.assertNotIn("paper.pdf", discovered)
 
 
+_PO_FIXTURE = _ROOT_DIR / "tests" / "fixtures" / "po" / "sample.po"
+
+
+class TestPoDiscoveryAndRouting(unittest.TestCase):
+    def _tree(self, tmp: str) -> pathlib.Path:
+        root = pathlib.Path(tmp)
+        (root / "sample.po").write_text(_PO_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+        (root / "notes.md").write_text("# Notes\n\nSome prose here.\n", encoding="utf-8")
+        return root
+
+    def test_po_in_default_extensions_but_not_pot(self) -> None:
+        self.assertIn(".po", DEFAULT_EXTENSIONS)
+        self.assertNotIn(".pot", DEFAULT_EXTENSIONS)
+
+    def test_discover_finds_po(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._tree(tmp)
+            names = [p.name for p in discover_files(root)]
+            self.assertIn("sample.po", names)
+
+    def _check(self, documents) -> None:
+        po_docs = [d for d in documents if d.source_path == "sample.po"]
+        self.assertEqual(len(po_docs), 6)
+        self.assertTrue(all(d.metadata["kind"] == "po_entry" for d in po_docs))
+        md_docs = [d for d in documents if d.source_path == "notes.md"]
+        self.assertTrue(md_docs)
+        self.assertTrue(all(d.metadata == {} for d in md_docs))
+
+    def test_load_chunk_documents_routes_po(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._check(load_chunk_documents(self._tree(tmp)))
+
+    def test_load_ast_chunk_documents_routes_po(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._check(load_ast_chunk_documents(self._tree(tmp)))
+
+
 if __name__ == "__main__":
     unittest.main()
