@@ -74,7 +74,10 @@ searched as prose rather than being silently skipped as binary.
   `"agent-orchestrated"`-reason stub — an agent can't read these natively
   the way it can a docx or image, so it must orchestrate an external ASR
   tool (via Bash) and register the result. See the `retrieval` skill's
-  "Audio and video: orchestrate an ASR tool, then register" section.
+  "Audio and video: orchestrate an ASR tool, then register" section. For
+  the end-to-end user workflow (ffmpeg, whisper.cpp, model download,
+  register), see
+  [Transcribe audio and video](transcribe-audio-video.md).
 - **Stat-only identity (audio/video only).** The engine never reads a
   video/audio source's bytes for any purpose — `ensure_sidecar`,
   `register_sidecar`, and `sidecar --list` all compute its identity from a
@@ -98,7 +101,8 @@ searched as prose rather than being silently skipped as binary.
   fingerprint on its own (via the transcript's content hash), so
   re-registering a changed transcript over an otherwise-unchanged source
   file still triggers a reindex. See [Reference:
-  CLI](../reference/cli.md#sidecar) and the `retrieval` skill's "Without
+  CLI](../reference/cli.md#sidecar), [Transcribe audio and
+  video](transcribe-audio-video.md), and the `retrieval` skill's "Without
   the `pdf` extra: author the transcript yourself" and "Audio and video:
   orchestrate an ASR tool, then register" sections for the full workflows.
 

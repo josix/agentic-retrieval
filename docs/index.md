@@ -45,7 +45,8 @@ runs on) are two different names, not a typo for each other.
 - Need to do something specific? See the
   [how-to guides](how-to/install.md) — install, run the CLI, use each
   retriever, fuse rankings, enable LLM contextualization, customize
-  indexing, integrate other coding agents, and build/release the engine.
+  indexing, [transcribe audio/video](how-to/transcribe-audio-video.md),
+  integrate other coding agents, and build/release the engine.
 - Want to understand *why* things work the way they do? See
   [concepts](concepts/retrieval-strategies.md) — strategy comparison,
   contextual retrieval, the cost model, and the architecture.

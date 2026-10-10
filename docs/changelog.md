@@ -6,7 +6,7 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
-## 0.11.0 — 2026-08-24
+## 0.11.0 — 2026-10-10
 
 - **\[engine\] Caption files (`.srt`/`.vtt`) as tier-1 machine-extracted
   media** — a new stdlib-only extractor (`captions/1`,
@@ -56,11 +56,20 @@ both.
   installed. `register_extractor` gained an optional `version=` kwarg
   (backing a new `_EXTRACTOR_VERSIONS` per-suffix map and
   `extractor_version_for(path)`) so a non-pypdf extractor stamps its own
-  manifest `extractor_version` without bumping every other suffix's cache.
+  manifest `extractor_version` without bumping every other suffix's cache;
+  `ensure_sidecar` passes the same per-suffix version into the rendered
+  `<!-- extractor: ... -->` header, so a caption sidecar's header and
+  manifest entry both say `captions/1`.
 - **\[engine\] Uncapped tier-3 discovery** — `discover_files` no longer
   applies any size cap to `AGENT_ORCHESTRATED_EXTENSIONS` files (see stat-only
   identity above); a 40MB `.mp4` is now discovered where a 30MB `.pdf`
   still is not.
+- **\[docs\]** New [transcribe-audio-video.md](how-to/transcribe-audio-video.md)
+  how-to covering the external ASR toolchain (ffmpeg, whisper.cpp, ggml
+  model download), the SRT→sidecar transcript grammar, and
+  register/reindex/verify; install.md prerequisites,
+  customize-indexing.md, the CLI sidecar reference, troubleshooting, and
+  the docs landing page now link to it, and it is in the mkdocs nav.
 
 **Upgrade note:** a corpus containing `.srt`/`.vtt`, or any
 `AGENT_ORCHESTRATED_EXTENSIONS` audio/video file, under its indexed root

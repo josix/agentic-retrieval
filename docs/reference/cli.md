@@ -274,7 +274,9 @@ an ASR tool via Bash and registers its output the same way. See the
 `retrieval` skill's "Without the `pdf` extra: author the transcript
 yourself" and "Audio and video: orchestrate an ASR tool, then register"
 sections for the full agent workflows (heading format, when to use this,
-lifecycle). Prints a `reindex to pick up this sidecar` hint; also warns on
+lifecycle). For the audio/video workflow end to end, see [Transcribe
+audio and video](../how-to/transcribe-audio-video.md). Prints a `reindex
+to pick up this sidecar` hint; also warns on
 stderr if `SOURCE` isn't discoverable by the default loader, or if the
 transcript has no `## Page N` / `## [HH:MM:SS] ...` headings (page/section
 breadcrumbs will be absent from search-hit context — harmless for a

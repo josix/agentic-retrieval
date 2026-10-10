@@ -65,6 +65,7 @@ nav:
       - Evaluate retrievers: how-to/evaluate-retrievers.md
       - Enable LLM contextualization: how-to/llm-contextualization.md
       - Customize indexing: how-to/customize-indexing.md
+      - Transcribe audio and video: how-to/transcribe-audio-video.md
       - Integrate coding agents: how-to/integrate-coding-agents.md
       - Build and release: how-to/build-and-release.md
   - Concepts:

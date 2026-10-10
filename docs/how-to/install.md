@@ -14,6 +14,9 @@ no-`uv` fallback.
   `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 - Optional: a Java 21 JDK on `PATH`, only if you want the `pyserini` extra
   (Pyserini/Anserini wraps a JVM) to actually work at index time.
+- Optional: **`ffmpeg`** and an ASR tool such as whisper.cpp, only if you
+  want to index audio/video media — see
+  [Transcribe audio and video](transcribe-audio-video.md).
 - Network access, only for the optional `remote` / `local` / `turbovec` /
   `pyserini` extras — the core install is fully offline.
 
