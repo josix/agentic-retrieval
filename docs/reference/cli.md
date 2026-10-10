@@ -271,16 +271,18 @@ path when an agent has read the PDF (or docx/pptx/xlsx/image) itself (e.g.
 via its own `Read` tool, or vision for an image) instead of installing
 `pypdf`, **and** the only path for audio/video, where an agent orchestrates
 an ASR tool via Bash and registers its output the same way. See the
-`retrieval` skill's "Without the `pdf` extra: author the transcript
-yourself" and "Audio and video: orchestrate an ASR tool, then register"
+`retrieval` skill's "Author the media transcript
+yourself (the default media path)" and "Audio and video: orchestrate an ASR tool, then register"
 sections for the full agent workflows (heading format, when to use this,
 lifecycle). For the audio/video workflow end to end, see [Transcribe
 audio and video](../how-to/transcribe-audio-video.md). Prints a `reindex
 to pick up this sidecar` hint; also warns on
 stderr if `SOURCE` isn't discoverable by the default loader, or if the
-transcript has no `## Page N` / `## [HH:MM:SS] ...` headings (page/section
-breadcrumbs will be absent from search-hit context — harmless for a
-heading-less format). Missing `--transcript` is an argument-parsing error
+transcript has no `## Page N` / `## [HH:MM:SS] ...` headings — the
+manifest's `pages` counter reads `0` in that case, which is expected and
+harmless for a page-less format, since section breadcrumbs come from any
+`## ` heading, not specifically `## Page N`. Missing `--transcript` is an
+argument-parsing error
 (exit code 2, mirroring argparse's own required-argument handling).
 
 ## Exit codes

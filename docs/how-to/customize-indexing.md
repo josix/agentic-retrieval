@@ -10,7 +10,7 @@
 | `exclude_globs` | `DEFAULT_EXCLUDE_GLOBS` | Filename deny-list globs (secret-looking names) |
 | `include_basenames` | `DEFAULT_INCLUDE_BASENAMES` | Extensionless basenames allowed regardless of `extensions` (e.g. add `'justfile'`) |
 | `max_bytes` | `MAX_FILE_BYTES` (1 MB) | Per-file size cap |
-| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (PDF, captions, agent-only media) — see [PDF auto-indexing](#pdf-auto-indexing) below. Agent-orchestrated audio/video is exempt from any size cap entirely |
+| `extract_max_bytes` | `extractors.EXTRACT_MAX_BYTES` (25 MB) | Per-file size cap for extractable suffixes (PDF, captions, agent-only media) — see [PDF auto-indexing](#pdf-auto-indexing) below. Agent-orchestrated audio/video is exempt from any size cap entirely. A source over this cap never appears in `retrieval sidecar --list` at all (excluded at discovery); raise this override for a large corpus |
 
 ## PDF auto-indexing
 
@@ -102,9 +102,16 @@ searched as prose rather than being silently skipped as binary.
   re-registering a changed transcript over an otherwise-unchanged source
   file still triggers a reindex. See [Reference:
   CLI](../reference/cli.md#sidecar), [Transcribe audio and
-  video](transcribe-audio-video.md), and the `retrieval` skill's "Without
-  the `pdf` extra: author the transcript yourself" and "Audio and video:
+  video](transcribe-audio-video.md), and the `retrieval` skill's "Author
+  the media transcript yourself (the default media path)" and "Audio and video:
   orchestrate an ASR tool, then register" sections for the full workflows.
+  For agent-only media specifically (`.docx`,
+  `.pptx`, `.xlsx`, images), use this heading convention per format so the
+  section breadcrumb is meaningful: `## Section: <heading>` (docx,
+  fallback `## Part N`), `## Slide N — <title>` (pptx), `## Sheet: <name>`
+  (xlsx), `## Image: <filename>` or `## Figure: <caption>` (images) — see
+  `skills/retrieval/references/office-image-transcripts.md` for the full
+  authoring guide.
 
 ## Extend, don't replace
 
