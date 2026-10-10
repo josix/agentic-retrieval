@@ -1023,6 +1023,22 @@ class TestCliPdfAutoActivation(unittest.TestCase):
         docx_sidecar = self.root / ".agentic-retrieval" / "extracted" / "report.docx.md"
         self.assertFalse(docx_sidecar.exists())
 
+    def test_extract_works_on_captions_only_tree_without_pypdf(self) -> None:
+        # require_extractors is now called with the *discovered* suffixes,
+        # not the blanket EXTRACTABLE_EXTENSIONS, so a caption-only tree
+        # must succeed even when pypdf isn't installed.
+        srt_path = self.root / "talk.srt"
+        srt_path.write_text(
+            "1\n00:00:01,000 --> 00:00:04,000\nHello from a caption file.\n",
+            encoding="utf-8",
+        )
+        code, out = _run(["extract", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        payload = json.loads(out)
+        self.assertEqual(len(payload["files"]), 1)
+        self.assertEqual(payload["files"][0]["source"], "talk.srt")
+        self.assertEqual(payload["files"][0]["status"], "ok")
+
 
 class TestSidecarCommand(unittest.TestCase):
     """CLI-surface coverage for the no-pypdf 'sidecar' subcommand: --list
@@ -1225,6 +1241,38 @@ class TestSidecarCommand(unittest.TestCase):
         )
         self.assertEqual(code, 0)
         self.assertIn(".agentic-retrieval/extracted/report.docx.md", out)
+
+    def test_sidecar_list_shows_mp4_as_agent_orchestrated_stub(self) -> None:
+        mp4_path = self.root / "recording.mp4"
+        mp4_path.write_bytes(b"fake video payload")
+
+        code, out = _run(["sidecar", "--list", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("recording.mp4: missing", out)
+
+        extractors.ensure_sidecar(self.root, mp4_path)
+        code, out = _run(["sidecar", "--list", "--root", str(self.root)])
+        self.assertEqual(code, 0)
+        self.assertIn("recording.mp4: stub (agent-orchestrated)", out)
+
+    def test_sidecar_register_on_mp4_reports_section_count(self) -> None:
+        mp4_path = self.root / "recording.mp4"
+        mp4_path.write_bytes(b"fake video payload")
+        transcript_path = self.root / "transcript.md"
+        transcript_path.write_text(
+            "## [00:00:00] Intro\n\n[00:00:00] Hello from an ASR transcript.\n\n"
+            "## [00:03:15] Middle\n\n[00:03:15] A later section of the talk.",
+            encoding="utf-8",
+        )
+        code, out = _run(
+            [
+                "sidecar", "--register", str(mp4_path),
+                "--transcript", str(transcript_path), "--root", str(self.root),
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("recording.mp4 ->", out)
+        self.assertIn("2 pages", out)
 
 
 if __name__ == "__main__":

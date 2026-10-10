@@ -294,6 +294,84 @@ media index yourself instead of leaving placeholder stubs:
    warning). Re-register (repeat steps 3-5) whenever the source file itself
    changes.
 
+#### Audio and video: orchestrate an ASR tool, then register
+
+Audio/video (`.mp4`, `.mov`, `.mkv`, `.webm`, `.mp3`, `.m4a`, `.wav`,
+`.flac`) is a third media tier, distinct from both PDFs and `.docx`/`.pptx`/
+`.xlsx`/images above: those are agent-*readable* (your `Read` tool or vision
+handles them natively), but you cannot "read" a video/audio file's bytes and
+produce a transcript — there is no native path. Indexing this tier means
+*orchestrating an external ASR tool via Bash*, then registering its output
+the same way you would a hand-authored transcript. Caption files
+(`.srt`/`.vtt`) are **not** this tier — they're machine-extracted
+automatically (tier 1, like PDFs), no agent work needed at all.
+
+1. **Detect.** `retrieval sidecar --list --root "$PROJECT_ROOT" --json` (or
+   text mode) reports these the same way as any other stub, with `reason:
+   agent-orchestrated` — distinct from `agent-only` (docx/images) and
+   `backend-missing` (PDF without pypdf). A media-heavy corpus can produce a
+   long wall of stubs in `--list`'s text output; filter with `--json | jq`
+   (e.g. `jq '.files[] | select(.state != "stub")'`) rather than scrolling
+   past them.
+2. **Pick a tool** via `command -v`, in this preference order: WhisperX
+   (`faster-whisper` + forced alignment, retrieval-grade word timestamps) →
+   whisper.cpp (no-Python, writes SRT/VTT directly) → `whisper` (plain
+   OpenAI CLI). If none is available, **leave the stub as-is** — this is an
+   honest state, not an error, and is exactly what the stub's own message
+   tells you to do.
+3. **Extract audio first** if the source is video, so the ASR tool only
+   ever sees a small mono WAV instead of decoding the container itself:
+   `ffmpeg -i <in> -vn -ac 1 -ar 16000 -c:a pcm_s16le <out>.wav`.
+4. **Window long-form audio**: overlapping ~60s windows with ~5s overlap,
+   converting every window's relative timestamps to absolute (offset by the
+   window's start) before merging — never leave a transcript with
+   window-relative times.
+5. **Model size** is a speed/accuracy trade-off, not a correctness one: a
+   `small`/`medium` model is usually enough for retrieval (exact wording
+   matters less than topical recall); reach for `large-v3` when the audio is
+   noisy or the content is jargon-heavy.
+6. **Write the transcript** in the sidecar format from the research report
+   (§E) — this is not optional prose, it's a specific grammar the chunker
+   depends on:
+   - One `## [HH:MM:SS] Topic` heading roughly every 1-5 minutes of content
+     (heading density sets chunk size, same as `## Page N` for PDFs).
+   - A `[HH:MM:SS] ` prefix on **every** paragraph, using the *absolute*
+     timestamp where that paragraph starts — never omit it, never use a
+     relative/window-local time.
+   - Timestamps always zero-padded `HH:MM:SS` (`00:04:15`, not `4:15`).
+   - Never hand-write the `<!-- source: ... -->` header — `retrieval sidecar
+     --register` adds it for you, exactly as with any other sidecar.
+7. **Diarization is optional, never required.** Speaker diarization is the
+   slowest, least reliable ASR stage (DER — diarization error rate —
+   commonly 11-19%, meaning roughly one attribution in six is wrong). If you
+   run it, only ever inline **real speaker names** you can actually
+   determine (from context, a meeting invite, etc.) — never invent or
+   promote a placeholder like `SPEAKER_00` into the transcript; if you can't
+   attribute a speaker with confidence, omit the label rather than guess.
+8. **Anti-fabrication (ASR-specific, in addition to the general rule
+   above).** Register only what the ASR tool actually output: you may
+   reformat and re-segment it into the heading/timestamp grammar above, but
+   never paraphrase, summarize, or fill in gaps the tool didn't transcribe.
+   Mark a genuinely unintelligible stretch as such (e.g. `[inaudible]`)
+   rather than guessing at words. Never transcribe from the filename or
+   your own assumption about what a recording "probably" contains — if the
+   tool produced nothing, the stub stays a stub.
+9. **Register** exactly as for any other media:
+   `retrieval sidecar --register <file> --transcript <file> --root
+   "$PROJECT_ROOT"`, then reindex (a bare `retrieval query` auto-reindexes,
+   same as every other tier).
+10. **Avoid double-counting a caption/video pair.** `talk.mp4` (tier 3,
+    stub until registered) and a sibling `talk.srt` (tier 1, auto-extracted)
+    index as two independent sources — the engine deliberately does **not**
+    auto-link same-stem files, so both would be indexed and their content
+    double-counted if you also hand-transcribe the mp4. If a project ships
+    both, prefer the caption file and leave the video's stub unregistered
+    (a stub contributes no real content to the index) rather than
+    authoring a redundant transcript for the mp4 too. There is no built-in
+    CLI flag to exclude a file from discovery by pattern; if a corpus needs
+    that, it's a `discover_files(..., exclude_globs=...)` change at the
+    call site, not a `retrieval` command-line option today.
+
 ### `query`'s default is consolidated (all strategies, one ranked list)
 
 `query` with **no `--retriever` flag** (equivalent to `--retriever all`)
