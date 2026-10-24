@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The repo's default GITHUB_TOKEN is read-only; creating the GitHub
+    # Release and uploading assets needs contents: write.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 

@@ -6,6 +6,23 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## 0.12.1 — 2026-10-24
+
+- **\[engine\] Faster `index --retriever all`** — `hybrid` now adopts the
+  `lexical` and `turbovec` retrievers built earlier in the same run (same
+  chunks, same params) instead of re-indexing and re-embedding every chunk;
+  any mismatch falls back to a full build. The corpus is chunked and
+  fingerprinted once per run and shared across strategies. On airflow
+  (157k chunks) a full `index --auto` went from 91.0 to 45.8 minutes, with
+  byte-identical cache files.
+- **\[engine\] Freshness checks no longer parse whole caches** — `index`
+  and `query` decide "up to date" from the meta file plus a 4 KB head of
+  the data file (schema version, optional modules, Lucene dir), instead of
+  loading the full multi-GB JSON. An up-to-date `index --auto` on airflow
+  went from 136 s / 7.9 GB peak memory to 34 s / 0.46 GB. `query` also stops
+  re-loading the cache just to read its meta, and rebuilds a stale cache
+  without parsing it first. No cache format or schema changes.
+
 ## 0.12.0 — 2026-10-10
 
 - **\[engine\] Record-loader registry** — new stdlib-only
