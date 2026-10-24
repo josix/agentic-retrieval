@@ -1,0 +1,63 @@
+# Build the MkDocs site and deploy it to GitHub Pages.
+# Uses the same docs dependency group (engine/pyproject.toml) and build
+# command as the `docs` job in ci.yml, so the deployed site is built exactly
+# the way CI checks it.
+
+name: Deploy Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      # API reference pages are rendered from engine docstrings.
+      - 'engine/retrieval/**'
+      - 'engine/pyproject.toml'
+      - 'engine/uv.lock'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment; never cancel one in progress.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build docs
+        run: uv run --project engine --group docs mkdocs build --strict -f mkdocs.yml
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
