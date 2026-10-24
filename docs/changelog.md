@@ -8,6 +8,8 @@ both.
 
 ## Unreleased
 
+## 0.13.0 — 2026-10-25
+
 - **\[engine\] MCP server** -- new `retrieval mcp` subcommand (and
   `retrieval-mcp` script, `mcp` extra) serving stdio MCP tools
   `search_domain_context`, `index_project` and `index_status` over the
@@ -17,14 +19,23 @@ both.
 - **\[plugin\] Per-project MCP registration** -- `mcpServers` in `.claude-plugin/plugin.json` +
   `scripts/retrieval-mcp.sh` start the server in every project where the
   plugin is enabled; setup syncs now include `--extra mcp`.
-- **\[engine\] MCP server round 2** -- steering tool descriptions and server
-  instructions, `readOnlyHint` annotations, never-raise envelope (`skipped`
-  with actionable reasons, `index {stale, created_at}`, `{error}` dicts),
-  `top_k` clamp (25) and snippet byte cap with `truncated`, the
-  `retrieval://index/status` resource and the `ground_implementation` prompt.
+- **\[engine\] MCP tool behaviour** -- steering tool descriptions and server
+  instructions, a `retrieval://index/status` resource and a
+  `ground_implementation` prompt; `index_status` is annotated read-only.
+  Search never raises: skipped strategies come back with actionable reasons,
+  plus an `index {stale, created_at}` block and `{error}` dicts; `top_k` is
+  clamped to 25 and snippets are byte-capped with a `truncated` flag.
+- **\[engine\] MCP safety and performance** -- the server never builds or
+  overwrites an LLM-enriched `lexical+ctx` index (cost opt-in stays on the
+  CLI); loaded retrievers are cached in-process, each request walks the
+  project once, and builds take a separate lock so status and searches stay
+  responsive (pi-serini is skipped with a retry hint during a build).
 - **\[plugin\] `domain-context-retrieval` skill** -- makes the agent consult
   the MCP tools before implementing, modifying or debugging code, with a
   `retrieval query` CLI fallback.
+- **\[docs\] zsh-safe setup snippets** -- extras are passed via
+  `set -- --extra ... ; uv sync ... "$@"`, which word-splits in both bash
+  and zsh.
 
 ## 0.12.1 — 2026-10-24
 
