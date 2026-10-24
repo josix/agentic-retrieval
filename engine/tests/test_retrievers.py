@@ -344,5 +344,88 @@ class TestRetrieverMetadata(unittest.TestCase):
             self.assertEqual(hit.metadata["msgid"], "Iterator Types")
 
 
+class _StubDense:
+    """Deterministic stand-in for TurbovecRetriever (no embedding model)."""
+
+    def __init__(self, model_name="sentence-transformers/all-MiniLM-L6-v2", bit_width=4):
+        self._model_name = model_name
+        self._bit_width = bit_width
+        self._docids = []
+        self.index_calls = 0
+
+    @property
+    def doc_count(self):
+        return len(self._docids)
+
+    def index(self, documents):
+        self.index_calls += 1
+        self._docids = [d.docid for d in documents]
+
+    def search(self, query, top_k):
+        return sorted(self._docids, key=lambda d: (len(d) + len(query)) % 3)[:top_k]
+
+    def to_dict(self):
+        return {"schema": 2, "model_name": self._model_name, "bit_width": self._bit_width,
+                "docids": self._docids, "units": [], "vectors": []}
+
+
+class TestDocCount(unittest.TestCase):
+    def test_doc_count_matches_to_dict_docids(self) -> None:
+        for cls in (LexicalRetriever, TreeSitterRetriever):
+            with self.subTest(cls=cls.__name__):
+                r = cls()
+                r.index(_documents())
+                self.assertEqual(r.doc_count, len(r.to_dict()["docids"]))
+                self.assertGreater(r.doc_count, 0)
+
+    def test_hybrid_doc_count_matches_to_dict(self) -> None:
+        r = HybridRetriever(dense=_StubDense())
+        r.index(_documents())
+        self.assertEqual(r.doc_count, len(r.to_dict()["docids"]))
+
+
+class TestHybridAdoptArms(unittest.TestCase):
+    def test_adopt_arms_matches_full_index(self) -> None:
+        docs = _documents()
+        full = HybridRetriever(dense=_StubDense())
+        full.index(docs)
+
+        lexical, dense = LexicalRetriever(), _StubDense()
+        lexical.index(docs)
+        dense.index(docs)
+        adopted = HybridRetriever(dense=_StubDense())
+        adopted.adopt_arms(docs, dense=dense, lexical=lexical)
+
+        self.assertEqual(adopted.to_dict(), full.to_dict())
+        for query in ("routers packets", "photosynthesis", "asteroid"):
+            self.assertEqual(
+                adopted.search_detailed(query, 3), full.search_detailed(query, 3)
+            )
+        self.assertEqual(dense.index_calls, 1)
+
+    def test_adopt_arms_without_lexical_indexes_fresh_lexical_arm(self) -> None:
+        docs = _documents()
+        dense = _StubDense()
+        dense.index(docs)
+        adopted = HybridRetriever(dense=_StubDense())
+        adopted.adopt_arms(docs, dense=dense)
+        expected = LexicalRetriever()
+        expected.index(docs)
+        self.assertEqual(adopted.to_dict()["lexical"], expected.to_dict())
+
+    def test_arms_compatible_rejects_mismatch(self) -> None:
+        hybrid = HybridRetriever(dense=_StubDense())
+        self.assertTrue(hybrid.arms_compatible(dense=_StubDense(), lexical=LexicalRetriever()))
+        self.assertFalse(hybrid.arms_compatible(dense=_StubDense(bit_width=2)))
+        self.assertFalse(hybrid.arms_compatible(dense=_StubDense(model_name="other")))
+        self.assertFalse(hybrid.arms_compatible(lexical=LexicalRetriever(bm25_k1=1.2)))
+        self.assertFalse(hybrid.arms_compatible(lexical=TreeSitterRetriever()))
+        self.assertFalse(
+            hybrid.arms_compatible(lexical=ContextualLexicalRetriever(contextualizer=str))
+        )
+        with self.assertRaises(ValueError):
+            hybrid.adopt_arms(_documents(), dense=_StubDense(bit_width=2))
+
+
 if __name__ == "__main__":
     unittest.main()
