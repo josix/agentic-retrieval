@@ -22,6 +22,7 @@ Repository = "https://github.com/josix/agentic-retrieval"
 
 [project.scripts]
 retrieval = "retrieval.cli:main"
+retrieval-mcp = "retrieval.mcp_server:main"
 
 [project.optional-dependencies]
 # Local embeddings — no API keys required, GPU optional
@@ -43,8 +44,10 @@ treesitter = ["tree-sitter>=0.24,<0.26", "tree-sitter-language-pack"]
 # with zero deps on py3.11+ (BSD-3); capped below 7 as a routine major-bump
 # guard, same convention as the treesitter pin above.
 pdf = ["pypdf>=6,<7"]
-# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter + pdf)
-all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter,pdf]"]
+# MCP server (`retrieval mcp`): serves query/index/status tools to an agent over stdio
+mcp = ["mcp>=1.10,<2"]
+# Every optional retrieval extra in one install (local + remote + turbovec + pyserini + treesitter + pdf + mcp)
+all = ["agentic-retrieval[local,remote,turbovec,pyserini,treesitter,pdf,mcp]"]
 # Dev tooling
 dev = ["ruff", "isort", "complexipy"]
 

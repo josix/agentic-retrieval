@@ -12,6 +12,9 @@ This content has moved to the docs site. See:
   [contextual retrieval](docs/concepts/contextual-retrieval.md),
   [cost model](docs/concepts/cost-model.md),
   [architecture](docs/concepts/architecture.md).
+- MCP server: [tools and registration](docs/how-to/integrate-coding-agents.md#mcp-server)
+  (`retrieval mcp`); the agent auto-consults it via the
+  [domain-context-retrieval skill](skills/domain-context-retrieval/SKILL.md).
 - Reference: [CLI](docs/reference/cli.md),
   [troubleshooting](docs/reference/troubleshooting.md).
 

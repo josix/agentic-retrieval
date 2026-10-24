@@ -6,6 +6,26 @@ commands, manifests), **\[docs\]** for documentation-only changes. The plugin
 and the engine are versioned in lockstep — a single version number covers
 both.
 
+## Unreleased
+
+- **\[engine\] MCP server** -- new `retrieval mcp` subcommand (and
+  `retrieval-mcp` script, `mcp` extra) serving stdio MCP tools
+  `search_domain_context`, `index_project` and `index_status` over the
+  existing query/index code paths. Root: `--root` > `RETRIEVAL_ROOT` >
+  `CLAUDE_PROJECT_DIR` > cwd. Lexical is built lazily; heavier strategies are
+  used once built via `index_project`.
+- **\[plugin\] Per-project MCP registration** -- `mcpServers` in `.claude-plugin/plugin.json` +
+  `scripts/retrieval-mcp.sh` start the server in every project where the
+  plugin is enabled; setup syncs now include `--extra mcp`.
+- **\[engine\] MCP server round 2** -- steering tool descriptions and server
+  instructions, `readOnlyHint` annotations, never-raise envelope (`skipped`
+  with actionable reasons, `index {stale, created_at}`, `{error}` dicts),
+  `top_k` clamp (25) and snippet byte cap with `truncated`, the
+  `retrieval://index/status` resource and the `ground_implementation` prompt.
+- **\[plugin\] `domain-context-retrieval` skill** -- makes the agent consult
+  the MCP tools before implementing, modifying or debugging code, with a
+  `retrieval query` CLI fallback.
+
 ## 0.12.1 — 2026-10-24
 
 - **\[engine\] Faster `index --retriever all`** — `hybrid` now adopts the

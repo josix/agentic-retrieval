@@ -13,5 +13,13 @@
     "bm25",
     "dense-ann",
     "contextual-retrieval"
-  ]
+  ],
+  "mcpServers": {
+    "retrieval": {
+      "command": "sh",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/retrieval-mcp.sh"
+      ]
+    }
+  }
 }

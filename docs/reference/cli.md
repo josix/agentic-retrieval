@@ -329,10 +329,23 @@ argument-parsing error
   `--json` envelope to `PATH`.
 - `stats`: a fixed set of `key: value` lines to stdout.
 
+## `retrieval mcp`
+
+```
+retrieval mcp [--root ROOT]
+```
+
+Serves `search_domain_context`, `index_project` and `index_status` over MCP
+stdio for one project (also available as the `retrieval-mcp` script). Requires
+the `mcp` extra; without it the command prints guidance to stderr and exits 1.
+stdout carries only the MCP protocol; logs go to stderr. Root resolution:
+`--root` -> `RETRIEVAL_ROOT` -> `CLAUDE_PROJECT_DIR` -> cwd.
+
 ## `--root` resolution order
 
 `--root` -> `RETRIEVAL_ROOT` environment variable -> current working
-directory, if neither is given.
+directory, if neither is given. (`retrieval mcp` additionally consults
+`CLAUDE_PROJECT_DIR` before falling back to cwd.)
 
 ## Next steps
 

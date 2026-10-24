@@ -88,6 +88,38 @@ required:
    span has been checked against the live file (not just the cache). Loop
    back to step 2 or 3 if any of that is missing.
 
+## MCP server
+
+`retrieval mcp` serves the engine over MCP stdio (needs the `mcp` extra). The
+Claude Code plugin registers it in `.claude-plugin/plugin.json` (`mcpServers`); for other clients:
+
+```bash
+claude mcp add retrieval -- uv run --project <engine> --extra mcp retrieval mcp
+```
+
+Tools:
+
+- `index_status()` -- per-strategy `indexed` / `loadable` / `stale`, plus a
+  `recommendation`.
+- `search_domain_context(query, retriever="all", top_k, pool, weights,
+  stale_ok, build_missing=False, include_snippet=True, snippet_lines=20)` --
+  consolidated, explainable hits (`path`, `start_line`, `end_line`,
+  `provenance`, `agreement`, `confidence`) with code snippets, plus `skipped`,
+  `stale` and a `hint`. Lexical builds lazily; other strategies join once
+  built via `index_project`. `stale_ok=None` (default) refreshes only lexical.
+- `index_project(retriever="all", force=False, auto=False)` -- build or
+  refresh caches (slow for `all` on large repos).
+
+Tool descriptions tell the agent to search first; `top_k` is clamped to 25,
+snippets are byte-capped (`truncated` flag), and errors come back as
+`{"error": ...}` / `skipped` entries rather than exceptions. Search results
+include an `index` block (`stale`, `created_at`). The server also exposes the
+resource `retrieval://index/status` and the prompt `ground_implementation(task)`.
+The `domain-context-retrieval` skill drives these tools automatically.
+
+The cache lives in `<root>/.agentic-retrieval` unless `RETRIEVAL_INDEX_DIR`
+is set.
+
 ## Environment variable contract
 
 Two environment variables the skills read, if your agent harness sets them:

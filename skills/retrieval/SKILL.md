@@ -75,9 +75,9 @@ if ! command -v uv >/dev/null 2>&1; then
     echo "uv is required. Install: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
     exit 1
 fi
-EXTRAS="--extra local --extra remote --extra turbovec --extra pyserini --extra treesitter"
+set -- --extra local --extra remote --extra turbovec --extra pyserini --extra treesitter --extra mcp  # EXTRAS (bash and zsh)
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
-uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS
+uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" "$@"
 ```
 
 Standalone (outside the plugin, running from the repo root):
@@ -87,12 +87,12 @@ if ! command -v uv >/dev/null 2>&1; then
     echo "uv is required. Install: curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
     exit 1
 fi
-EXTRAS="--extra local --extra remote --extra turbovec --extra pyserini --extra treesitter"
-uv sync --project engine $EXTRAS
+set -- --extra local --extra remote --extra turbovec --extra pyserini --extra treesitter --extra mcp  # EXTRAS (bash and zsh)
+uv sync --project engine "$@"
 ```
 
-Whichever extras you sync, **pass the exact same `$EXTRAS` on every
-`uv run` in Step 2** — `uv run` re-syncs the environment to the extras
+Whichever extras you sync, **pass the exact same extras (the `set --`
+list, expanded as `"$@"`) on every `uv run` in Step 2** — `uv run` re-syncs the environment to the extras
 named on that invocation, so a mismatched run would silently add or
 remove packages (including pypdf) behind your back.
 
@@ -104,7 +104,7 @@ works, then re-run the full sync once the prerequisite is in place:
 ```bash
 export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}"
 uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine"           # core only
-uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS   # retry full install
+uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" "$@"      # retry full install (re-run the `set --` line first)
 ```
 
 Report which extras synced and which failed **verbatim** from `uv`'s own
@@ -120,17 +120,17 @@ once with `index`, then search it (as many times as you like) with `query`:
 
 ```bash
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-EXTRAS="--extra local --extra remote --extra turbovec --extra pyserini --extra treesitter"
+set -- --extra local --extra remote --extra turbovec --extra pyserini --extra treesitter --extra mcp  # EXTRAS (bash and zsh)
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
-uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS \
+uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" "$@" \
   retrieval index --root "$PROJECT_ROOT" --auto
 
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$HOME/.cache/agentic-retrieval/uv-venv}" \
-uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" $EXTRAS \
+uv run --project "${CLAUDE_PLUGIN_ROOT}/engine" "$@" \
   retrieval query "your query here" --root "$PROJECT_ROOT" --auto
 ```
 
-(`$EXTRAS` is the same list Step 1 synced — add `--extra pdf` to both
+(`"$@"` is the same extras list Step 1 synced; `set --` works in bash and zsh, whereas an unquoted `$EXTRAS` string is not word-split by zsh — add `--extra pdf` to both
 places only if you deliberately chose pypdf as the extraction tool.)
 
 ### Hyperparameters are YOUR decision (made inline, at index/query time)
@@ -568,6 +568,39 @@ spans that don't answer the question. When top hits look off-topic:
   known token or browse the likely directory directly. Retrieval augments your
   existing tools; it never replaces them.
 
+### MCP server (per-project, always-on)
+
+The plugin's `mcpServers` entry (`.claude-plugin/plugin.json`) starts an `agentic-retrieval` MCP server
+(`scripts/retrieval-mcp.sh` -> `retrieval mcp`) bound to the opened project
+(`--root`, else `RETRIEVAL_ROOT`, else `CLAUDE_PROJECT_DIR`, else cwd). Prefer
+its tools over shelling out when they are available (prefixed
+`mcp__plugin_agentic-retrieval_retrieval__*`):
+
+- `index_status` -- which strategy caches exist, load, and are stale. Call at
+  session start.
+- `search_domain_context(query, retriever="all", top_k, pool, weights,
+  stale_ok, build_missing, include_snippet, snippet_lines)` -- call **before
+  implementing** to find the repo's existing implementations and patterns;
+  `Read` the returned `path:start_line-end_line` spans and follow them.
+  Results are consolidated and explainable (`provenance`, `agreement`,
+  `confidence`) and include a snippet.
+- `index_project(retriever="all", force, auto)` -- build/refresh caches.
+
+Semantics: lexical is built lazily on first query; heavier strategies
+(turbovec, pi-serini, hybrid, treesitter) are consolidated only once built via
+`index_project` (`build_missing=False` default; they appear in `skipped`
+otherwise). `stale_ok` defaults to auto: only the cheap lexical cache is
+refreshed after edits; other stale caches are searched as-is and listed in
+`stale`. The server logs to stderr only -- stdout carries the protocol.
+
+Tools steer the agent (descriptions say "use first before implementing"),
+never raise (failures come back as `{"error": ...}` or `skipped` entries with
+a fix), clamp `top_k` to 25 and cap snippets (`truncated` flag). An
+`index_status` resource (`retrieval://index/status`) and a
+`ground_implementation(task)` prompt are also registered. To have the agent
+consult these on its own while working in any repo, see the
+[`domain-context-retrieval`](../domain-context-retrieval/SKILL.md) skill.
+
 ### Advanced: direct engine API
 
 The CLI above wraps the same `load_chunk_documents` -> `index` ->
@@ -660,6 +693,9 @@ print(r.search("what carries data between networks", top_k=5))
 
 ## Graceful degradation
 
+- The MCP server works lexical-only without the heavy extras. Without the
+  `mcp` extra, `retrieval mcp` prints guidance to stderr and exits 1 (the
+  server shows as failed in `/mcp`); the launcher script installs it on demand.
 - The core `uv sync` (no extras) must succeed — everything downstream
   depends on it.
 - If the full extras sync fails, sync core only to confirm the base
@@ -695,6 +731,8 @@ print(r.search("what carries data between networks", top_k=5))
 
 ## Guardrails
 
+- **Never print to stdout in the MCP server** -- stdout is the protocol stream;
+  log to stderr.
 - **Cost warnings**: LLM-enriched indexing (`lexical+ctx`, or
   `retrieval.llm_contextualizer`) calls a network LLM and costs tokens — warn
   the user and prefer explicit opt-in before running it without being asked.
