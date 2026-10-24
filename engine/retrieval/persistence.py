@@ -1,6 +1,7 @@
 """On-disk persistence for fitted retrievers, keyed by project path.
 
-Stdlib-only (``json``, ``hashlib``, ``os``, ``pathlib``, ``time``) — each
+Stdlib-only (``json``, ``hashlib``, ``importlib.util``, ``os``, ``pathlib``,
+``re``, ``time``) — each
 retriever's cache is a pair of JSON files (data + meta, e.g. ``lexical.json``
 + ``meta.json`` for the lexical family, ``hybrid.json`` + ``hybrid.meta.json``
 for hybrid) under a per-project directory. By default that directory is
@@ -41,8 +42,10 @@ one chunk.
 
 import dataclasses
 import hashlib
+import importlib.util
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -304,6 +307,88 @@ def load_index(
     return retriever, meta
 
 
+def read_meta(
+    root: "os.PathLike[str] | str", retriever_name: str = "lexical"
+) -> Optional[Dict[str, Any]]:
+    """Read only the (small) meta file for *retriever_name*; ``None`` if it
+    is missing, unreadable or not a JSON object. Uses the same file
+    ``load_index`` reads, so the shared lexical/lexical+ctx slot behaves alike.
+    """
+    _data_filename, meta_filename, _cls = _layout(retriever_name)
+    try:
+        meta = json.loads((index_dir(root) / meta_filename).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+_HEAD_BYTES = 4096
+_SCHEMA_HEAD_RE = re.compile(rb'\{"schema": (\d+)[,}]')
+_INDEX_DIR_HEAD_RE = re.compile(rb'"index_dir": (null|"(?:[^"\\]|\\.)*")')
+
+
+def _modules_available(modules: Tuple[str, ...]) -> bool:
+    for module in modules:
+        try:
+            if importlib.util.find_spec(module) is None:
+                return False
+        except (ImportError, ValueError):
+            return False
+    return True
+
+
+def _lucene_dir_exists(head: bytes) -> bool:
+    match = _INDEX_DIR_HEAD_RE.search(head)
+    if match is None:
+        return False
+    try:
+        index_path = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return False
+    return bool(index_path) and Path(index_path).is_dir()
+
+
+def cache_is_loadable(root: "os.PathLike[str] | str", retriever_name: str = "lexical") -> bool:
+    """Cheap approximation of ``load_index(...) is not None`` that never
+    parses the (potentially multi-GB) data file.
+
+    Probes only the first few KB of the data file: it must exist and begin
+    with ``{"schema": <current SCHEMA_VERSION>`` (every ``to_dict`` emits
+    ``schema`` first; writes are atomic so a valid head implies a complete
+    file), the retriever's optional modules must be importable, and for
+    ``pi-serini`` the referenced Lucene directory must exist. A corrupt body
+    after a valid head is not detected here; the query path still performs a
+    full ``load_index`` and rebuilds on failure.
+    """
+    data_filename, _meta_filename, retriever_cls = _layout(retriever_name)
+    try:
+        with open(index_dir(root) / data_filename, "rb") as handle:
+            head = handle.read(_HEAD_BYTES)
+    except OSError:
+        return False
+    match = _SCHEMA_HEAD_RE.match(head)
+    if match is None or int(match.group(1)) != retriever_cls.SCHEMA_VERSION:
+        return False
+    if not _modules_available(tuple(getattr(retriever_cls, "REQUIRED_MODULES", ()))):
+        return False
+    if retriever_name == "pi-serini":
+        return _lucene_dir_exists(head)
+    return True
+
+
+def fingerprint_memoized(
+    root: "os.PathLike[str] | str", memo: Optional[Dict[str, str]] = None, **loader_kw: Any
+) -> str:
+    """``compute_fingerprint`` cached in *memo*, keyed by the loader kwargs.
+    ``memo=None`` computes without caching."""
+    if memo is None:
+        return compute_fingerprint(root, **loader_kw)
+    key = json.dumps(_serializable_loader_kw(loader_kw), sort_keys=True, default=repr)
+    if key not in memo:
+        memo[key] = compute_fingerprint(root, **loader_kw)
+    return memo[key]
+
+
 def cached_retrievers(root: "os.PathLike[str] | str") -> Dict[str, Dict[str, Any]]:
     """Map of cached retriever name -> meta dict for *root*.
 
@@ -332,6 +417,7 @@ def is_stale(
     meta: Dict[str, Any],
     *,
     params: Optional[Dict[str, Any]] = None,
+    fingerprint_memo: Optional[Dict[str, str]] = None,
     **loader_kw: Any,
 ) -> bool:
     """Return True if *root* + *meta* should be rebuilt.
@@ -356,7 +442,8 @@ def is_stale(
     own defaults when neither is available.
     """
     resolved_loader_kw = loader_kw if loader_kw else loader_kw_from_meta(meta)
-    if compute_fingerprint(root, **resolved_loader_kw) != meta.get("fingerprint"):
+    current = fingerprint_memoized(root, fingerprint_memo, **resolved_loader_kw)
+    if current != meta.get("fingerprint"):
         return True
     if extractors.needs_reextraction(root):
         return True

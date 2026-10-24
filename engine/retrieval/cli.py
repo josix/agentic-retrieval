@@ -27,7 +27,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from retrieval import __version__, extractors
 from retrieval.autotune import (
@@ -43,12 +43,15 @@ from retrieval.document import SearchHit
 from retrieval.eval import format_report_text, report_to_dict, run_eval
 from retrieval.fusion import candidate_pool
 from retrieval.persistence import (
+    cache_is_loadable,
     cached_retrievers,
     compute_fingerprint,
+    fingerprint_memoized,
     index_dir,
     is_stale,
     load_index,
     loader_kw_from_meta,
+    read_meta,
     save_index,
 )
 from retrieval.project_loader import (
@@ -423,11 +426,32 @@ def _build_and_save(
     fingerprint = compute_fingerprint(root, **(loader_kw or {}))
     retriever = _make_retriever(root, retriever_name, params)
     retriever.index(_documents_for(root, retriever_name, policy, loader_kw))
-    save_index(
+    _save_built(root, retriever_name, retriever, fingerprint, params, corpus_stats, loader_kw)
+    return retriever
+
+
+def _save_built(
+    root: Path,
+    retriever_name: str,
+    retriever: Retriever,
+    fingerprint: str,
+    params: Optional[Dict[str, Any]],
+    corpus_stats: Optional[Dict[str, Any]],
+    loader_kw: Optional[Dict[str, Any]],
+) -> Path:
+    """Persist an already-indexed *retriever* with the standard meta."""
+    return save_index(
         retriever, root, fingerprint, retriever_name, __version__,
         params=params, corpus_stats=corpus_stats, loader_kw=loader_kw or None,
     )
-    return retriever
+
+
+def _doc_count(retriever: Any) -> int:
+    """Indexed chunk count without serializing the retriever."""
+    count = getattr(retriever, "doc_count", None)
+    if count is None:
+        count = len(retriever.to_dict()["docids"])
+    return count
 
 
 def _up_to_date_message(
@@ -435,20 +459,95 @@ def _up_to_date_message(
     retriever_name: str,
     params: Optional[Dict[str, Any]] = None,
     loader_kw: Optional[Dict[str, Any]] = None,
+    *,
+    fingerprint_memo: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Return a "fast path" message if a fresh, non-stale cache exists for
     *root* + *retriever_name*; ``None`` if there's no cache or it's stale
-    (a rebuild is needed).
+    (a rebuild is needed). Reads only the meta file plus a small head probe
+    of the data file (see ``cache_is_loadable``) — never the full cache.
     """
-    cached = load_index(root, retriever_name)
-    if cached is None:
+    meta = read_meta(root, retriever_name)
+    if meta is None or not cache_is_loadable(root, retriever_name):
         return None
-    _retriever, meta = cached
-    if is_stale(root, meta, params=params, **(loader_kw or {})):
+    if is_stale(
+        root, meta, params=params, fingerprint_memo=fingerprint_memo, **(loader_kw or {})
+    ):
         return None
     return (
         f"{retriever_name} index up to date -> {index_dir(root)}  (use --force to rebuild)"
     )
+
+
+def _index_hybrid(hybrid: Any, docs: Any, built: Dict[str, Tuple[Retriever, Any]]) -> None:
+    """Index *hybrid* over *docs*, adopting the lexical/turbovec arms built
+    earlier in this run when they indexed the very same documents with
+    matching params; otherwise fall back to a full ``hybrid.index(docs)``.
+    """
+    dense_entry = built.get("turbovec")
+    if dense_entry is None or dense_entry[1] is not docs or not hybrid.arms_compatible(
+        dense=dense_entry[0]
+    ):
+        hybrid.index(docs)
+        return
+    lexical = None
+    lexical_entry = built.get("lexical")
+    if (
+        lexical_entry is not None
+        and lexical_entry[1] is docs
+        and hybrid.arms_compatible(lexical=lexical_entry[0])
+    ):
+        lexical = lexical_entry[0]
+    hybrid.adopt_arms(docs, dense=dense_entry[0], lexical=lexical)
+
+
+class _IndexAllContext:
+    """Per-run state shared across the strategies built by ``_index_all``:
+    the fingerprint memo, the currently loaded corpus (and its key), and the
+    lexical/turbovec retrievers built so far (with the documents object they
+    indexed) so hybrid can adopt them instead of re-embedding.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        loader_kw: Optional[Dict[str, Any]],
+    ) -> None:
+        self.root = root
+        self.loader_kw = loader_kw
+        self.fp_memo: Dict[str, str] = {}
+        self.docs_key: Optional[Tuple[str, Optional[ChunkingPolicy]]] = None
+        self.docs: Any = None
+        self.built: Dict[str, Tuple[Retriever, Any]] = {}
+
+    def _documents(self, name: str, policy: Optional[ChunkingPolicy]) -> Any:
+        key = ("ast" if name == "treesitter" else "line", policy)
+        if key != self.docs_key:
+            self.docs = None  # release the previous corpus before loading the next
+            self.docs = _documents_for(self.root, name, policy, self.loader_kw)
+            self.docs_key = key
+        return self.docs
+
+    def build(
+        self,
+        name: str,
+        params: Optional[Dict[str, Any]],
+        corpus_stats: Optional[Dict[str, Any]],
+        policy: Optional[ChunkingPolicy],
+    ) -> None:
+        """Index and persist strategy *name*; raises ``RuntimeError`` when its
+        optional extras are missing."""
+        fingerprint = fingerprint_memoized(self.root, self.fp_memo, **(self.loader_kw or {}))
+        docs = self._documents(name, policy)
+        retriever = _make_retriever(self.root, name, params)
+        if name == "hybrid":
+            _index_hybrid(retriever, docs, self.built)
+        else:
+            retriever.index(docs)
+        _save_built(self.root, name, retriever, fingerprint, params, corpus_stats, self.loader_kw)
+        if name in ("lexical", "turbovec"):
+            self.built[name] = (retriever, docs)
+        print(f"{name}: indexed {_doc_count(retriever)} chunks")
 
 
 def _index_all(
@@ -472,23 +571,24 @@ def _index_all(
     applied identically to every strategy, as before.
     """
     lexical_failed = False
+    ctx = _IndexAllContext(root, loader_kw)
     for name in _DEFAULT_INDEX_SET:
-        if not force and _up_to_date_message(root, name, params, loader_kw) is not None:
+        if not force and _up_to_date_message(
+            root, name, params, loader_kw, fingerprint_memo=ctx.fp_memo
+        ) is not None:
             print(f"{name}: up to date (use --force to rebuild)")
             continue
         build_params, build_corpus_stats, build_policy = params, corpus_stats, policy
         if build_params is None:
             build_params, build_corpus_stats, build_policy = _params_for_rebuild(root, name, None)
         try:
-            retriever = _build_and_save(
-                root, name, build_params, build_corpus_stats, build_policy, loader_kw
-            )
-            chunk_count = len(retriever.to_dict()["docids"])
-            print(f"{name}: indexed {chunk_count} chunks")
+            ctx.build(name, build_params, build_corpus_stats, build_policy)
         except RuntimeError as exc:
             print(f"{name}: skipped ({str(exc).splitlines()[0]})")
             if name == "lexical":
                 lexical_failed = True
+        if name == "hybrid":
+            ctx.built.clear()
     print(f"-> {index_dir(root)}")
     return 1 if lexical_failed else 0
 
@@ -546,7 +646,7 @@ def _cmd_index(args: argparse.Namespace) -> int:
         retriever, root, fingerprint, args.retriever, __version__,
         params=params, corpus_stats=corpus_stats, loader_kw=loader_kw or None,
     )
-    chunk_count = len(retriever.to_dict()["docids"])
+    chunk_count = _doc_count(retriever)
     print(f"indexed {chunk_count} chunks -> {saved_dir}  fingerprint={fingerprint[:12]}")
     return 0
 
@@ -622,6 +722,21 @@ def _load_or_rebuild(
     likewise recovered from the index's own meta (see ``_rebuild_loader_kw``)
     rather than requiring a query-time flag.
     """
+    memo: Dict[str, str] = {}
+    if not stale_ok:
+        # Stale caches are rebuilt anyway: decide from the meta alone so the
+        # (possibly multi-GB) data file isn't parsed just to be discarded.
+        meta = read_meta(root, retriever_name)
+        if meta is not None and cache_is_loadable(root, retriever_name):
+            meta_loader_kw = loader_kw_from_meta(meta)
+            if is_stale(root, meta, params=params, fingerprint_memo=memo, **meta_loader_kw):
+                rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
+                    root, retriever_name, params, meta
+                )
+                return _build_and_save(
+                    root, retriever_name, rebuild_params, rebuild_corpus_stats,
+                    rebuild_policy, meta_loader_kw,
+                )
     cached = load_index(root, retriever_name)
     if cached is None:
         rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
@@ -634,7 +749,9 @@ def _load_or_rebuild(
         )
     retriever, meta = cached
     rebuild_loader_kw = loader_kw_from_meta(meta)
-    if is_stale(root, meta, params=params, **rebuild_loader_kw) and not stale_ok:
+    if not stale_ok and is_stale(
+        root, meta, params=params, fingerprint_memo=memo, **rebuild_loader_kw
+    ):
         rebuild_params, rebuild_corpus_stats, rebuild_policy = _params_for_rebuild(
             root, retriever_name, params, meta
         )
@@ -715,8 +832,8 @@ def _query_all(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
     ``skipped`` (``[{name, reason}]``), and ``results`` (``ConsolidatedHit``
     list truncated to the resolved ``top_k``).
     """
-    lexical_cached = load_index(root, "lexical")
-    top_k = _resolve_query_top_k(args, lexical_cached[1] if lexical_cached else None)
+    lexical_meta = read_meta(root, "lexical") if cache_is_loadable(root, "lexical") else None
+    top_k = _resolve_query_top_k(args, lexical_meta)
     # Pool depth isn't capped to a corpus size here: each strategy has its
     # own indexed unit count, and consolidation itself (a quadratic
     # span-merge over the pooled hits) stays cheap enough at this depth to
@@ -784,8 +901,7 @@ def _cmd_query(args: argparse.Namespace) -> int:
     if args.retriever == "all":
         return _cmd_query_consolidated(args, root)
     retriever = _load_or_rebuild(root, args.retriever, args.stale_ok)
-    cached = load_index(root, args.retriever)
-    top_k = _resolve_query_top_k(args, cached[1] if cached else None)
+    top_k = _resolve_query_top_k(args, read_meta(root, args.retriever))
     hits: List[SearchHit] = retriever.search_detailed(args.query, top_k)
     if args.json:
         print(json.dumps({"query": args.query, "results": [_hit_to_json(h) for h in hits]}))

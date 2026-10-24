@@ -19,11 +19,14 @@ _ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from unittest import mock  # noqa: E402
+
 from retrieval import extractors  # noqa: E402
 from retrieval.bm25 import BM25Index  # noqa: E402
 from retrieval.document import Document  # noqa: E402
 from retrieval.persistence import (  # noqa: E402
     cache_base_dir,
+    cache_is_loadable,
     cached_retrievers,
     compute_fingerprint,
     index_dir,
@@ -31,6 +34,7 @@ from retrieval.persistence import (  # noqa: E402
     load_index,
     loader_kw_from_meta,
     project_key,
+    read_meta,
     relevant_params,
     save_index,
 )
@@ -645,6 +649,141 @@ class TestPersistence(unittest.TestCase):
             found = list(discover_files(root))
             self.assertTrue(any(p.name == "a.txt" for p in found))
             self.assertFalse(any(".agentic-retrieval" in p.parts for p in found))
+
+
+class TestMetaOnlyFreshness(unittest.TestCase):
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        _write(self.root / "a.txt", "routers forward packets between networks")
+        _write(self.root / "b.txt", "photosynthesis converts sunlight")
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+        self._project_tmp.cleanup()
+
+    def _save_lexical(self, name: str = "lexical") -> None:
+        retriever = LexicalRetriever()
+        retriever.index(load_chunk_documents(self.root))
+        save_index(retriever, self.root, compute_fingerprint(self.root), name, "0.0.0")
+
+    def test_read_meta_matches_load_index_meta(self) -> None:
+        self.assertIsNone(read_meta(self.root, "lexical"))
+        self._save_lexical("lexical+ctx")
+        loaded = load_index(self.root, "lexical")
+        assert loaded is not None
+        self.assertEqual(read_meta(self.root, "lexical"), loaded[1])
+        self.assertEqual(read_meta(self.root, "lexical")["retriever_name"], "lexical+ctx")
+
+    def test_read_meta_none_on_corrupt_meta(self) -> None:
+        self._save_lexical()
+        (index_dir(self.root) / "meta.json").write_text("{nope", encoding="utf-8")
+        self.assertIsNone(read_meta(self.root, "lexical"))
+
+    def test_cache_is_loadable_true_for_fresh_lexical(self) -> None:
+        self._save_lexical()
+        self.assertTrue(cache_is_loadable(self.root, "lexical"))
+
+    def _scenarios(self):
+        directory = index_dir(self.root)
+        data_path = directory / "lexical.json"
+
+        def delete():
+            data_path.unlink()
+
+        def empty():
+            data_path.write_text("", encoding="utf-8")
+
+        def garbage():
+            data_path.write_text("{not valid json", encoding="utf-8")
+
+        def old_schema():
+            data = json.loads(data_path.read_text(encoding="utf-8"))
+            data["schema"] = 2
+            data_path.write_text(json.dumps(data), encoding="utf-8")
+
+        def meta_only():
+            data_path.unlink()
+
+        return {"deleted": delete, "empty": empty, "garbage": garbage,
+                "old_schema": old_schema, "meta_only": meta_only}
+
+    def test_cache_is_loadable_false_cases(self) -> None:
+        for label, mutate in self._scenarios().items():
+            with self.subTest(case=label):
+                self._save_lexical()
+                mutate()
+                self.assertFalse(cache_is_loadable(self.root, "lexical"))
+
+    def test_cache_is_loadable_parity_with_load_index(self) -> None:
+        for label, mutate in self._scenarios().items():
+            with self.subTest(case=label):
+                self._save_lexical()
+                mutate()
+                meta_ok = read_meta(self.root, "lexical") is not None
+                self.assertEqual(
+                    meta_ok and cache_is_loadable(self.root, "lexical"),
+                    load_index(self.root, "lexical") is not None,
+                )
+
+    def _write_turbovec(self, schema: int) -> None:
+        directory = index_dir(self.root)
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {"schema": schema, "model_name": "m", "bit_width": 4,
+                   "docids": [], "units": [], "vectors": []}
+        (directory / "turbovec.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_cache_is_loadable_turbovec_respects_extras(self) -> None:
+        self._write_turbovec(TurbovecRetriever.SCHEMA_VERSION)
+        target = "retrieval.persistence.importlib.util.find_spec"
+        with mock.patch(target, return_value=None):
+            self.assertFalse(cache_is_loadable(self.root, "turbovec"))
+        with mock.patch(target, return_value=object()):
+            self.assertTrue(cache_is_loadable(self.root, "turbovec"))
+        self._write_turbovec(1)
+        with mock.patch(target, return_value=object()):
+            self.assertFalse(cache_is_loadable(self.root, "turbovec"))
+
+    def test_cache_is_loadable_pi_serini_checks_lucene_dir(self) -> None:
+        directory = index_dir(self.root)
+        directory.mkdir(parents=True, exist_ok=True)
+        lucene = directory / "lucene"
+        lucene.mkdir()
+        target = "retrieval.persistence.importlib.util.find_spec"
+
+        def write(index_path) -> None:
+            payload = {"schema": 2, "k1": 0.9, "b": 0.4, "index_dir": index_path,
+                       "docids": [], "units": []}
+            (directory / "pi-serini.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        with mock.patch(target, return_value=object()):
+            write(str(lucene))
+            self.assertTrue(cache_is_loadable(self.root, "pi-serini"))
+            write(str(directory / "missing"))
+            self.assertFalse(cache_is_loadable(self.root, "pi-serini"))
+            write(None)
+            self.assertFalse(cache_is_loadable(self.root, "pi-serini"))
+
+    def test_is_stale_fingerprint_memo_computes_once(self) -> None:
+        self._save_lexical()
+        meta = read_meta(self.root, "lexical")
+        assert meta is not None
+        memo: dict = {}
+        with mock.patch(
+            "retrieval.persistence.compute_fingerprint", wraps=compute_fingerprint
+        ) as spy:
+            self.assertFalse(is_stale(self.root, meta, fingerprint_memo=memo))
+            self.assertFalse(is_stale(self.root, meta, fingerprint_memo=memo))
+            self.assertEqual(spy.call_count, 1)
+            is_stale(self.root, meta, fingerprint_memo=memo, extensions=frozenset({".txt"}))
+            self.assertEqual(spy.call_count, 2)
 
 
 class TestAgentSidecarFingerprint(unittest.TestCase):

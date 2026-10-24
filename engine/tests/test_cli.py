@@ -25,6 +25,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from test_extractors import _PYPDF_INSTALLED, _write_pdf  # noqa: E402
 from test_record_loaders import register_fake_xyz  # noqa: E402
+from test_retrievers import _StubDense  # noqa: E402
 
 from retrieval import cli, extractors  # noqa: E402
 from retrieval.cli import main  # noqa: E402
@@ -415,6 +416,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("skipped", out)
         self.assertIn("turbovec", out)
+        self.assertIn("hybrid: skipped", out)
         self.assertTrue((index_dir(self.root) / "lexical.json").exists())
 
     def test_index_accepts_all_choice(self) -> None:
@@ -1475,6 +1477,186 @@ class TestCliRecordDetails(unittest.TestCase):
 
     def test_hit_without_metadata_prints_no_details(self) -> None:
         self.assertEqual(self._query_text({}), ["data.xyz:1-1"])
+
+
+class TestIndexPerf(unittest.TestCase):
+    """Redundant-work removal in the index/query path."""
+
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        _write(self.root / "a.txt", "routers forward packets between networks and carry data")
+        _write(self.root / "b.txt", "photosynthesis converts sunlight into chemical energy")
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+        self.dense_arms: list = []
+        real_make = cli._make_retriever
+
+        def fake_make(root, name, params=None):
+            retriever = real_make(root, name, params)
+            if name == "turbovec":
+                dense = _StubDense(retriever._model_name, retriever._bit_width)
+                self.dense_arms.append(dense)
+                return dense
+            if name == "hybrid":
+                dense = _StubDense(retriever._dense._model_name, retriever._dense._bit_width)
+                self.dense_arms.append(dense)
+                retriever._dense = dense
+            return retriever
+
+        patcher = mock.patch("retrieval.cli._make_retriever", side_effect=fake_make)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+        self._project_tmp.cleanup()
+
+    @property
+    def index_calls(self) -> int:
+        return sum(d.index_calls for d in self.dense_arms)
+
+    def _read(self, name: str):
+        return json.loads((index_dir(self.root) / name).read_text(encoding="utf-8"))
+
+    def _index(self, *extra: str):
+        return _run(["index", "--root", str(self.root), *extra])
+
+    def test_up_to_date_check_never_loads_data_file(self) -> None:
+        self._index("--retriever", "lexical", "--force")
+        with mock.patch("retrieval.cli.load_index", side_effect=AssertionError("heavy load")):
+            code, out = self._index("--retriever", "lexical")
+        self.assertEqual(code, 0)
+        self.assertIn("up to date", out)
+
+    def test_up_to_date_all_never_loads_data_file(self) -> None:
+        self._index("--force")
+        # Stubbed retrievers don't need real optional backends installed.
+        with mock.patch("retrieval.persistence._modules_available", return_value=True), \
+                mock.patch("retrieval.cli.load_index", side_effect=AssertionError("heavy load")):
+            code, out = self._index()
+        self.assertEqual(code, 0)
+        self.assertIn("lexical: up to date", out)
+        self.assertIn("hybrid: up to date", out)
+
+    def test_corrupt_lexical_data_is_not_up_to_date(self) -> None:
+        self._index("--retriever", "lexical", "--force")
+        path = index_dir(self.root) / "lexical.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["schema"] = 2
+        path.write_text(json.dumps(data), encoding="utf-8")
+        _code, out = self._index("--retriever", "lexical")
+        self.assertIn("indexed", out)
+        self.assertNotIn("up to date", out)
+
+    def test_index_all_reuses_built_arms_for_hybrid(self) -> None:
+        code, out = self._index("--force")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.index_calls, 1)
+        self.assertIn("hybrid: indexed 2 chunks", out)
+        hybrid = self._read("hybrid.json")
+        self.assertEqual(hybrid["lexical"], self._read("lexical.json"))
+        self.assertEqual(hybrid["dense"], self._read("turbovec.json"))
+
+    def test_hybrid_reuse_output_matches_full_build(self) -> None:
+        self._index("--force")
+        reused = self._read("hybrid.json")
+        calls_after_all = self.index_calls
+        with tempfile.TemporaryDirectory() as other:
+            os.environ["RETRIEVAL_INDEX_DIR"] = other
+            self.dense_arms.clear()
+            self._index("--retriever", "hybrid", "--force")
+            full = self._read("hybrid.json")
+        self.assertEqual(self.index_calls, 1)
+        self.assertEqual(calls_after_all, 1)
+        self.assertEqual(reused, full)
+        self.assertEqual(list(reused), list(full))
+
+    def test_index_all_partial_reuse_when_lexical_up_to_date(self) -> None:
+        self._index("--retriever", "lexical", "--force")
+        self._index()
+        self.assertEqual(self.index_calls, 1)
+        self.assertEqual(self._read("hybrid.json")["lexical"], self._read("lexical.json"))
+
+    def test_index_all_hybrid_falls_back_when_arm_params_differ(self) -> None:
+        self._index("--force", "--bit-width", "2")
+        # hybrid built with different dense params than a default-built
+        # turbovec arm would reuse: seed turbovec at 4 bits, then rebuild all
+        # with hybrid at 2 bits via a fresh run.
+        self.dense_arms.clear()
+        real = cli._make_retriever  # the patched factory
+        calls = []
+
+        def mismatched(root, name, params=None):
+            retriever = real(root, name, params)
+            calls.append(name)
+            if name == "hybrid":
+                retriever._dense._bit_width = 8  # arms no longer compatible
+            return retriever
+
+        with mock.patch("retrieval.cli._make_retriever", side_effect=mismatched):
+            self._index("--force", "--bit-width", "2")
+        self.assertEqual(self.index_calls, 2)
+
+    def test_index_all_hybrid_skipped_when_turbovec_skipped(self) -> None:
+        def boom(self, documents):
+            raise RuntimeError("turbovec retriever needs extras")
+
+        with mock.patch.object(_StubDense, "index", boom):
+            code, out = self._index("--force")
+        self.assertEqual(code, 0)
+        self.assertIn("turbovec: skipped", out)
+        self.assertIn("hybrid: skipped", out)
+
+    def test_index_all_loads_line_documents_once(self) -> None:
+        with mock.patch(
+            "retrieval.cli.load_chunk_documents", wraps=load_chunk_documents
+        ) as spy:
+            self._index("--force")
+        self.assertEqual(spy.call_count, 1)
+
+    def test_index_all_computes_fingerprint_once(self) -> None:
+        with mock.patch(
+            "retrieval.cli.compute_fingerprint", wraps=compute_fingerprint
+        ) as spy_cli, mock.patch(
+            "retrieval.persistence.compute_fingerprint", wraps=compute_fingerprint
+        ) as spy_persist:
+            self._index("--force")
+            self.assertEqual(spy_cli.call_count + spy_persist.call_count, 1)
+            self._index()
+            self.assertEqual(spy_cli.call_count + spy_persist.call_count, 2)
+
+    def test_index_single_counts_without_second_to_dict(self) -> None:
+        with mock.patch.object(
+            LexicalRetriever, "to_dict", autospec=True, side_effect=LexicalRetriever.to_dict
+        ) as spy:
+            _code, out = self._index("--retriever", "lexical", "--force")
+        self.assertEqual(spy.call_count, 1)
+        self.assertIn("indexed 2 chunks ->", out)
+
+    def test_query_loads_index_once(self) -> None:
+        self._index("--retriever", "lexical", "--force")
+        with mock.patch("retrieval.cli.load_index", wraps=cli.load_index) as spy:
+            code, _out = _run(["query", "routers", "--root", str(self.root),
+                               "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+        self.assertEqual(spy.call_count, 1)
+
+    def test_query_stale_cache_rebuilds_without_loading(self) -> None:
+        self._index("--retriever", "lexical", "--force")
+        old = self._read("meta.json")["fingerprint"]
+        _bump_mtime(self.root / "a.txt")
+        with mock.patch("retrieval.cli.load_index", wraps=cli.load_index) as spy:
+            code, _out = _run(["query", "routers", "--root", str(self.root),
+                               "--retriever", "lexical"])
+        self.assertEqual(code, 0)
+        self.assertEqual(spy.call_count, 0)
+        self.assertNotEqual(self._read("meta.json")["fingerprint"], old)
 
 
 if __name__ == "__main__":

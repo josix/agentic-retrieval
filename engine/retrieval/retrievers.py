@@ -97,6 +97,9 @@ class Retriever(Protocol):
     def search_detailed(self, query: str, top_k: int) -> List[SearchHit]: ...
 
 
+_MISSING = object()
+
+
 class LexicalRetriever:
     """Project core: TF-IDF + BM25 fused with RRF, document-level.
 
@@ -117,6 +120,10 @@ class LexicalRetriever:
     #: (not re-derived) at query time.
     SCHEMA_VERSION = 3
 
+    #: Importable modules needed to load this retriever's cache (mirrors the
+    #: ``_require_backend(s)`` checks) — lets freshness checks avoid a full load.
+    REQUIRED_MODULES: tuple = ()
+
     def __init__(
         self, *, bm25_k1: float = 1.5, bm25_b: float = 0.75, tokenizer: str = "plain"
     ) -> None:
@@ -127,6 +134,11 @@ class LexicalRetriever:
         }
         self._tfidf = TfidfIndex(tokenizer=tokenizer)
         self._bm25 = BM25Index(k1=bm25_k1, b=bm25_b, tokenizer=tokenizer)
+
+    @property
+    def doc_count(self) -> int:
+        """Number of indexed chunks (== ``len(to_dict()["docids"])``)."""
+        return len(self._docids)
 
     def index(self, documents: List[Document]) -> None:
         self._units = _units_from_documents(documents)
@@ -280,6 +292,9 @@ class TurbovecRetriever:
     #: metadata).
     SCHEMA_VERSION = 2
 
+    #: See ``LexicalRetriever.REQUIRED_MODULES``.
+    REQUIRED_MODULES: tuple = ("sentence_transformers", "turbovec", "numpy")
+
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
                  bit_width: int = 4) -> None:
         self._model_name = model_name
@@ -289,6 +304,11 @@ class TurbovecRetriever:
         self._index = None
         self._embedder = None
         self._vectors: Optional[List[List[float]]] = None
+
+    @property
+    def doc_count(self) -> int:
+        """Number of indexed chunks (== ``len(to_dict()["docids"])``)."""
+        return len(self._docids)
 
     def _require_backends(self):
         try:
@@ -421,6 +441,9 @@ class PiSeriniRetriever:
     #: metadata).
     SCHEMA_VERSION = 2
 
+    #: See ``LexicalRetriever.REQUIRED_MODULES``.
+    REQUIRED_MODULES: tuple = ("pyserini",)
+
     def __init__(self, k1: float = 0.9, b: float = 0.4,
                  index_path: "Optional[Path | str]" = None) -> None:
         self._k1 = k1
@@ -433,6 +456,11 @@ class PiSeriniRetriever:
         self._docids: List[str] = []
         self._units: List[Dict[str, Any]] = []
         self._units_by_docid: Dict[str, Dict[str, Any]] = {}
+
+    @property
+    def doc_count(self) -> int:
+        """Number of indexed chunks (== ``len(to_dict()["docids"])``)."""
+        return len(self._docids)
 
     def _require_backend(self):
         try:
@@ -559,6 +587,9 @@ class HybridRetriever:
     #: metadata). v3 tracks the lexical arm's own v3 bump (tokenizer mode).
     SCHEMA_VERSION = 3
 
+    #: See ``LexicalRetriever.REQUIRED_MODULES``.
+    REQUIRED_MODULES: tuple = ("sentence_transformers", "turbovec", "numpy")
+
     def __init__(self, dense: Optional[TurbovecRetriever] = None, **params: Any) -> None:
         hybrid_weights = params.pop("hybrid_weights", None)
         lexical_params = {k: v for k, v in params.items() if k in LexicalRetriever.ACCEPTS}
@@ -569,6 +600,55 @@ class HybridRetriever:
             list(hybrid_weights) if hybrid_weights is not None else None
         )
         self._units_by_docid: Dict[str, Dict[str, Any]] = {}
+
+    @property
+    def doc_count(self) -> int:
+        """Number of indexed chunks (== ``len(to_dict()["docids"])``)."""
+        return len(self._lexical._docids)
+
+    def arms_compatible(
+        self,
+        *,
+        lexical: Optional[LexicalRetriever] = None,
+        dense: Optional[Any] = None,
+    ) -> bool:
+        """True if pre-built *lexical*/*dense* arms equal what a fresh
+        ``HybridRetriever`` with this one's constructor params would build.
+
+        Exact ``LexicalRetriever`` only (subclasses such as the contextual or
+        tree-sitter variants index different text).
+        """
+        if lexical is not None and not (
+            type(lexical) is LexicalRetriever and lexical._params == self._lexical._params
+        ):
+            return False
+        if dense is not None and not (
+            getattr(dense, "_model_name", _MISSING) == self._dense._model_name
+            and getattr(dense, "_bit_width", _MISSING) == self._dense._bit_width
+        ):
+            return False
+        return True
+
+    def adopt_arms(
+        self,
+        documents: List[Document],
+        *,
+        dense: Any,
+        lexical: Optional[LexicalRetriever] = None,
+    ) -> None:
+        """Equivalent to ``index(documents)`` using arms already indexed over
+        exactly *documents* (no re-embedding). A missing *lexical* arm is
+        indexed fresh (cheap). Raises ``ValueError`` if the arms' params
+        don't match this retriever's.
+        """
+        if not self.arms_compatible(lexical=lexical, dense=dense):
+            raise ValueError("pre-built arms do not match this hybrid retriever's params")
+        self._dense = dense
+        if lexical is not None:
+            self._lexical = lexical
+        else:
+            self._lexical.index(documents)
+        self._units_by_docid = {u["docid"]: u for u in _units_from_documents(documents)}
 
     def index(self, documents: List[Document]) -> None:
         # Dense arm first: it fails fast (with opt-in guidance) when the
