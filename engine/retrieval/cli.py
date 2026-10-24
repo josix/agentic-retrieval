@@ -19,7 +19,9 @@ RuntimeError when its extras are missing). ``extract`` pre-warms PDF
 sidecar transcripts via ``pypdf`` (the only subcommand that hard-fails on
 a missing ``pdf`` extra); ``sidecar`` inspects sidecar state (``--list``)
 or registers an agent-authored transcript (``--register``) without ever
-needing ``pypdf`` on either mode — the no-install recovery path.
+needing ``pypdf`` on either mode — the no-install recovery path. ``mcp``
+serves the same query/index machinery to an agent over MCP stdio
+(``retrieval.mcp_server``; needs the ``mcp`` extra).
 """
 
 import argparse
@@ -27,7 +29,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from retrieval import __version__, extractors
 from retrieval.autotune import (
@@ -196,6 +198,13 @@ def _build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument(
         "--output", default=None,
         help="consolidated-mode only: also write the JSON envelope to this path",
+    )
+
+    mcp_parser = subparsers.add_parser(
+        "mcp", help="serve retrieval to an agent over MCP (stdio; needs the 'mcp' extra)"
+    )
+    mcp_parser.add_argument(
+        "--root", help="project root to serve (default: RETRIEVAL_ROOT, CLAUDE_PROJECT_DIR, or cwd)"
     )
 
     stats_parser = subparsers.add_parser(
@@ -824,14 +833,24 @@ def _resolve_query_top_k(args: argparse.Namespace, meta: Optional[Dict[str, Any]
     return 5
 
 
-def _query_all(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
-    """Load/rebuild every strategy in ``_DEFAULT_INDEX_SET`` (skipping any
-    whose extras are missing), search each, and consolidate the results.
+def _query_all(
+    root: Path,
+    args: argparse.Namespace,
+    names: Sequence[str] = _DEFAULT_INDEX_SET,
+    load: Optional[Callable[[Path, str, bool], Retriever]] = None,
+) -> Dict[str, Any]:
+    """Load/rebuild every strategy in *names* (default ``_DEFAULT_INDEX_SET``;
+    skipping any whose extras are missing), search each, and consolidate the
+    results.
 
     Returns a dict with ``retrievers`` (names successfully consolidated),
     ``skipped`` (``[{name, reason}]``), and ``results`` (``ConsolidatedHit``
     list truncated to the resolved ``top_k``).
+
+    *load* replaces ``_load_or_rebuild`` (same signature) for embedders such
+    as the MCP server that cache loaded retrievers; the CLI leaves it ``None``.
     """
+    load = load or _load_or_rebuild
     lexical_meta = read_meta(root, "lexical") if cache_is_loadable(root, "lexical") else None
     top_k = _resolve_query_top_k(args, lexical_meta)
     # Pool depth isn't capped to a corpus size here: each strategy has its
@@ -841,9 +860,9 @@ def _query_all(root: Path, args: argparse.Namespace) -> Dict[str, Any]:
     pool = args.pool if args.pool is not None else candidate_pool(top_k)
     per_retriever_hits: Dict[str, List[SearchHit]] = {}
     skipped: List[Dict[str, str]] = []
-    for name in _DEFAULT_INDEX_SET:
+    for name in names:
         try:
-            retriever = _load_or_rebuild(root, name, args.stale_ok)
+            retriever = load(root, name, args.stale_ok)
             per_retriever_hits[name] = retriever.search_detailed(args.query, pool)
         except RuntimeError as exc:
             skipped.append({"name": name, "reason": str(exc).splitlines()[0]})
@@ -896,13 +915,23 @@ def _cmd_query_consolidated(args: argparse.Namespace, root: Path) -> int:
     return 1 if "lexical" not in consolidated["retrievers"] else 0
 
 
+def _query_single(
+    root: Path,
+    args: argparse.Namespace,
+    load: Optional[Callable[[Path, str, bool], Retriever]] = None,
+) -> List[SearchHit]:
+    """Load/rebuild the one strategy ``args.retriever`` and search it
+    (*load* as in ``_query_all``)."""
+    retriever = (load or _load_or_rebuild)(root, args.retriever, args.stale_ok)
+    top_k = _resolve_query_top_k(args, read_meta(root, args.retriever))
+    return retriever.search_detailed(args.query, top_k)
+
+
 def _cmd_query(args: argparse.Namespace) -> int:
     root = _resolve_root(args.root)
     if args.retriever == "all":
         return _cmd_query_consolidated(args, root)
-    retriever = _load_or_rebuild(root, args.retriever, args.stale_ok)
-    top_k = _resolve_query_top_k(args, read_meta(root, args.retriever))
-    hits: List[SearchHit] = retriever.search_detailed(args.query, top_k)
+    hits = _query_single(root, args)
     if args.json:
         print(json.dumps({"query": args.query, "results": [_hit_to_json(h) for h in hits]}))
     else:
@@ -1257,7 +1286,16 @@ def _cmd_sidecar(args: argparse.Namespace) -> int:
     return _cmd_sidecar_register(args, root)
 
 
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    """``retrieval mcp``: serve over MCP stdio (lazy import keeps the
+    stdlib-only CLI free of the optional ``mcp`` dependency)."""
+    from retrieval.mcp_server import run_cli
+
+    return run_cli(args.root)
+
+
 _COMMANDS = {
+    "mcp": _cmd_mcp,
     "index": _cmd_index,
     "query": _cmd_query,
     "stats": _cmd_stats,

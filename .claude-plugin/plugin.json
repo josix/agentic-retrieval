@@ -1,6 +1,6 @@
 {
   "name": "agentic-retrieval",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "Six retrieval strategies compared offline-first: contextual lexical retrieval (TF-IDF/BM25/RRF fusion), its LLM-enriched lexical+ctx variant, turbovec (dense ANN), pi-serini (Lucene BM25 via Pyserini), hybrid (lexical + dense fused with RRF), and tree-sitter (AST-boundary chunking with enclosing scope context)",
   "author": {
     "name": "Wilson Josix Wang"
@@ -13,5 +13,13 @@
     "bm25",
     "dense-ann",
     "contextual-retrieval"
-  ]
+  ],
+  "mcpServers": {
+    "retrieval": {
+      "command": "sh",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/retrieval-mcp.sh"
+      ]
+    }
+  }
 }

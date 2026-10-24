@@ -4,7 +4,7 @@
 |---|---|---|---|
 | `RETRIEVAL_ROOT` | `retrieval.cli._resolve_root` | (none) | Project root to index/query/report on, when `--root` isn't passed |
 | `PROJECT_ROOT` | shell convention (skills/how-to snippets) | (none) | Not read by the engine directly — a shell variable convention used to capture `$CLAUDE_PROJECT_DIR`/`$(pwd)` before invoking `uv run`, then passed as `--root` or exported as `RETRIEVAL_ROOT` |
-| `CLAUDE_PROJECT_DIR` | Claude Code (set by the harness) | (none) | The invoking project's directory — captured into `PROJECT_ROOT`/`RETRIEVAL_ROOT` before `uv run`, per the skills' convention |
+| `CLAUDE_PROJECT_DIR` | Claude Code (set by the harness) | (none) | The invoking project's directory — captured into `PROJECT_ROOT`/`RETRIEVAL_ROOT` before `uv run`, per the skills' convention; `retrieval mcp` reads it directly as its root fallback (after `--root` and `RETRIEVAL_ROOT`) |
 | `CLAUDE_PLUGIN_ROOT` | Claude Code (set by the harness) | (none) | The plugin's own directory (where `engine/` lives when installed) — used as the `--project` path for `uv sync`/`uv run` |
 | `UV_PROJECT_ENVIRONMENT` | `uv` itself | (uv's own cache) | Pins the engine's `uv`-managed virtualenv to a specific path — the skills default this to `$HOME/.cache/agentic-retrieval/uv-venv`, useful when the plugin's cache directory isn't writable |
 | `RETRIEVAL_INDEX_DIR` | `retrieval.persistence.cache_base_dir` | (none — `index_dir` falls back to `<project-root>/.agentic-retrieval`) | Relocates the on-disk index cache to a shared `<override>/<project-key>` base directory — see [persistence and cache](persistence-and-cache.md) for the self-indexing feedback-loop warning before pointing it inside a project root |

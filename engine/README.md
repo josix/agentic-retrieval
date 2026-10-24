@@ -43,7 +43,9 @@ uv pip install "agentic-retrieval[all] @ git+https://github.com/josix/agentic-re
 | `turbovec` | `turbovec` | TurboQuant-quantized dense ANN retriever |
 | `pyserini` | `pyserini` | Lucene BM25 retriever (needs a Java 21 JDK) |
 | `treesitter` | `tree-sitter`, `tree-sitter-language-pack` | AST-boundary ("cAST") chunking for code corpora |
-| `all` | `agentic-retrieval[local,remote,turbovec,pyserini,treesitter]` | Every retrieval extra above, one-shot install of every strategy |
+| `pdf` | `pypdf` | PDF text extraction (sidecar transcripts) |
+| `mcp` | `mcp` | MCP stdio server (`retrieval mcp` / `retrieval-mcp`): `search_domain_context`, `index_project`, `index_status` |
+| `all` | `agentic-retrieval[local,remote,turbovec,pyserini,treesitter,pdf,mcp]` | Every extra above, one-shot install |
 | `dev` | `ruff`, `isort`, `complexipy` | Dev tooling |
 
 The core install (no extras) has zero required dependencies and always works.

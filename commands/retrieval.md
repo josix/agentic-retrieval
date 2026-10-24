@@ -82,10 +82,14 @@ phased deep-answer workflow (Q → R → T → C → S, Step 3 of
 command remains a thin dispatcher into that skill.
 
 `setup` runs `uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra
-local --extra remote --extra turbovec --extra pyserini --extra treesitter`
+local --extra remote --extra turbovec --extra pyserini --extra treesitter --extra mcp`
 — deliberately without `--extra pdf`, so media extraction stays delegated
 to the agent (see `skills/retrieval/SKILL.md` Step 1; add `pdf` to opt in
 to pypdf).
+
+The plugin also registers a per-project MCP server (`mcpServers` in `.claude-plugin/plugin.json`) exposing
+`search_domain_context`, `index_project` and `index_status`; use
+`search_domain_context` before implementing to ground work in existing code.
 
 For per-method usage (setup, indexing/search snippets, graceful degradation,
 and combining methods), see the sibling knowledge skills:

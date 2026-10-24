@@ -56,6 +56,18 @@ coding agent chooses which cached strategy fits each query.
 
 As a Claude Code skill, the same flows are driven with `/retrieval`.
 
+### MCP server
+
+The plugin's `mcpServers` entry (`.claude-plugin/plugin.json`) starts an MCP server per opened project
+(`retrieval mcp`, root from `--root`, `RETRIEVAL_ROOT`, `CLAUDE_PROJECT_DIR`,
+or cwd) exposing `search_domain_context` (consolidated retrieval of the repo's
+existing code/patterns, with snippets), `index_project` and `index_status`.
+Lexical builds lazily; heavier strategies are used once built with
+`index_project`. The
+[`domain-context-retrieval`](skills/domain-context-retrieval/SKILL.md) skill
+makes the agent consult these tools before implementing. See
+[integrate coding agents](docs/how-to/integrate-coding-agents.md#mcp-server).
+
 ### Translation memory for gettext PO projects
 
 `.po` files are indexed one entry per Document (msgid + msgstr, with
