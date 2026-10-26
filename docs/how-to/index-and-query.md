@@ -133,10 +133,10 @@ invoking `uv run` and dispatch to the same `retrieval index`/`retrieval
 query` CLI shown above. Full step-by-step protocol lives in
 `skills/retrieval/SKILL.md`.
 
-Four knowledge skills auto-trigger for the agent when it needs per-method
+Five knowledge skills auto-trigger for the agent when it needs per-method
 depth — you generally won't invoke these yourself, but it's worth knowing
 they're there: `lexical-retrieval-usage`, `dense-retrieval-usage`,
-`lucene-retrieval-usage`, `hybrid-retrieval-usage`.
+`lucene-retrieval-usage`, `code-retrieval-usage`, `hybrid-retrieval-usage`.
 
 ## Next steps
 

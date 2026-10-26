@@ -38,6 +38,7 @@ coexist:
 | `turbovec` | `turbovec.json` | `turbovec.meta.json` |
 | `pi-serini` | `pi-serini.json` | `pi-serini.meta.json` |
 | `hybrid` | `hybrid.json` | `hybrid.meta.json` |
+| `treesitter` | `treesitter.json` | `treesitter.meta.json` |
 
 `lexical` and `lexical+ctx` share one slot because a ctx index's persisted
 state is plain `LexicalRetriever` data (the LLM context is baked into the
@@ -51,10 +52,13 @@ cache slot for a root.
 
 A single default `retrieval index` run (no `--retriever`, i.e. `all`)
 populates several of these independent slots in one pass — `lexical`,
-`turbovec`, `pi-serini`, and `hybrid` (whichever backends' extras are
-present) — each with its own `fingerprint`/`created_at`/staleness, so e.g.
+`turbovec`, `pi-serini`, `hybrid` and `treesitter` (whichever backends' extras
+are present) — each with its own `fingerprint`/`created_at`/staleness, so e.g.
 the `turbovec` slot can go stale and get rebuilt independently of the
-`lexical` slot.
+`lexical` slot. Within that run, `hybrid` adopts the `lexical`/`turbovec`
+arms just built when they are compatible (same lexical parameters; same
+embedding model and `bit_width`), so the dense embeddings are computed once.
+If `turbovec` was already up to date and not rebuilt, `hybrid` builds fully.
 
 ## `meta.json` fields
 
@@ -67,6 +71,9 @@ the `turbovec` slot can go stale and get rebuilt independently of the
 | `doc_count` | `int` | Number of indexed **chunks** (one chunk-Document per span, docid `"{path}:{start}-{end}"`) — despite the name, this is a chunk count, not a file count |
 | `file_count` | `int` | Number of distinct source files those chunks came from (`len(set(unit["source_path"] for unit in units))`); usually smaller than `doc_count` once a file yields more than one chunk |
 | `retriever_name` | `str` | The `--retriever` value used to build this cache |
+| `hyperparams` | `dict` (optional) | Only when built with `--auto` or a hyperparameter flag: the subset relevant to this strategy plus the chunking keys |
+| `corpus_stats` | `dict` (optional) | Only when built with `--auto`: `n_chunks`, `mean_chunk_tokens`, `chunk_token_cv`, `auto`. Feeds `query --auto` |
+| `loader_kw` | `dict` (optional) | Discovery overrides such as `--no-pdf`; persisted so they stay sticky across later flag-less runs |
 
 Persisted `units` may carry an optional `metadata` object (for example the
 msgid/msgstr fields of a PO entry); it is absent for non-PO units and for
@@ -87,7 +94,11 @@ order, one line per file:
 `st_size`, and `mtime_ns` is `st_mtime_ns`. Any file added, removed,
 resized, or touched (mtime change) alters the fingerprint, without reading
 file contents. `is_stale(root, meta)` recomputes the current fingerprint
-and compares it against `meta["fingerprint"]`.
+and compares it against `meta["fingerprint"]`. It is also stale when a PDF
+sidecar was written as a stub before an extraction backend was available and
+one is available now, and — when the caller passes hyperparameters (`index
+--auto` or flags) — when the relevant ones differ from the recorded
+`hyperparams`.
 
 ## Atomic writes
 
@@ -98,11 +109,27 @@ half-written cache file for a future `load_index` to trip over — a
 corrupt/incomplete JSON file causes `load_index` to return `None` (treated
 as "no usable cache"), never a partially-written one.
 
+## Freshness check (fast path)
+
+The "is this cache up to date?" check used by `index` reads only the meta file
+and the first 4 KB of the data file (`cache_is_loadable`), never the full
+cache. The head must begin with `{"schema": <current SCHEMA_VERSION>`, the
+strategy's optional modules must be importable, and for `pi-serini` the
+referenced Lucene directory must exist. A corrupt body past that head is not
+detected here; `query` still performs a full `load_index` and rebuilds on
+failure.
+
+The corpus fingerprint is memoized per set of loader kwargs and computed once
+per `index` run, with the loaded chunks shared across strategies. This did not
+change the cache format (see the [changelog](../changelog.md), 0.12.1).
+
 ## `--force` / `--stale-ok` semantics
 
 - **`index --force`**: rebuild unconditionally, even if a fresh (non-stale)
   cache already exists. Without `--force`, `index` checks for an existing,
   non-stale cache first and skips the rebuild if found (the "fast path").
+  `index --auto` or hyperparameter flags whose values differ from the
+  recorded `hyperparams` trigger a rebuild even without `--force`.
 - **`query --stale-ok`**: search the existing cached index even if it's
   stale (fingerprint mismatch), instead of auto-reindexing first. Without
   `--stale-ok`, `query` rebuilds automatically whenever the cache is

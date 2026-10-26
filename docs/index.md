@@ -3,7 +3,10 @@
 A Claude Code plugin + skill for comparing six retrieval strategies over
 the invoking project's own files (docs/code under the project root). Ships a
 vendored, offline-first retrieval engine (`engine/`) with a stdlib-only core
-and optional per-strategy extras — no global installs, ever.
+and optional per-strategy extras — no global installs, ever. It also ships a
+per-project MCP server (`retrieval mcp`) so agents can query the index through
+`search_domain_context`; see the
+[MCP server](how-to/integrate-coding-agents.md#mcp-server) guide.
 
 All Python dependencies are managed by [`uv`](https://docs.astral.sh/uv/) —
 zero global `pip install` anywhere. `uv` is a hard requirement.
@@ -47,6 +50,8 @@ runs on) are two different names, not a typo for each other.
   retriever, fuse rankings, enable LLM contextualization, customize
   indexing, [transcribe audio/video](how-to/transcribe-audio-video.md),
   integrate other coding agents, and build/release the engine.
+- Wiring an agent over MCP? See
+  [MCP server](how-to/integrate-coding-agents.md#mcp-server).
 - Want to understand *why* things work the way they do? See
   [concepts](concepts/retrieval-strategies.md) — strategy comparison,
   contextual retrieval, the cost model, and the architecture.
@@ -55,9 +60,9 @@ runs on) are two different names, not a typo for each other.
   vars, engine API, troubleshooting, and the generated API pages.
 - [Changelog](changelog.md)
 
-## The six plugin skills
+## The plugin skills, agent and MCP server
 
-As a Claude Code skill, the same flows are driven with `/retrieval`. Six
+As a Claude Code skill, the same flows are driven with `/retrieval`. Seven
 skills ship with the plugin:
 
 - `skills/retrieval/SKILL.md` — the full invocation protocol (setup, index,
@@ -70,3 +75,10 @@ skills ship with the plugin:
   for code corpora.
 - `skills/hybrid-retrieval-usage/SKILL.md` — fusing methods and choosing
   between them.
+- `skills/domain-context-retrieval/SKILL.md` — grounds implement/debug work
+  in the repo via the MCP tools `search_domain_context`, `index_status` and
+  `index_project`, with a `retrieval query` CLI fallback.
+
+The plugin also ships the agent `agents/retrieval-tracer.md` (a deep
+code-path tracer for fan-out) and registers the MCP server `retrieval` in
+`.claude-plugin/plugin.json`.

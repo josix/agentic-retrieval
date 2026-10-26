@@ -9,20 +9,28 @@ dispatcher over `retrieval.persistence` + `retrieval.retrievers`.
 ```
 retrieval --version
 
-retrieval index [--root ROOT] [--retriever all|lexical|lexical+ctx|turbovec|pi-serini|hybrid]
-                [--force]
+retrieval index [--root ROOT]
+                [--retriever all|lexical|lexical+ctx|turbovec|pi-serini|hybrid|treesitter]
+                [--force] [--auto] [--tokenizer plain|code|cjk]
+                [--target-chars N] [--config-chars N] [--code-chars N] [--ast-max-chars N]
+                [--bm25-k1 F] [--bm25-b F] [--bit-width N] [--embed-model NAME]
+                [--lucene-k1 F] [--lucene-b F] [--no-pdf] [--allow-large-context]
                 # --retriever defaults to "all"
 
 retrieval query QUERY [--root ROOT]
                        [--retriever all|lexical|lexical+ctx|turbovec|pi-serini|hybrid|treesitter]
-                       [--top-k N] [--json] [--stale-ok]
+                       [--top-k N] [--auto] [--pool N] [--json] [--stale-ok]
                        [--weights "name:w,..."] [--output PATH]
                        # --retriever defaults to "all" (consolidated mode)
 
 retrieval stats [--root ROOT]
 
-retrieval eval --queries PATH [--root PATH] [--k 5] [--warm-runs 5]
+retrieval tune [--root ROOT] [--json]
+
+retrieval eval --queries PATH [--root PATH] [--k 5] [--warm-runs 5] [--auto]
                [--json] [--output PATH]
+
+retrieval mcp [--root ROOT]
 
 retrieval extract [--root ROOT] [--force] [--prune] [--json]
 
@@ -39,6 +47,17 @@ Build and persist an index for a project root.
 | `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid,treesitter}` | **`all`** | Retriever(s) to build |
 | `--tokenizer {plain,code,cjk}` | `plain` (or the `--auto` pick) | Lexical tokenizer. `code` adds identifier subtokens; `cjk` emits character bigrams for Chinese/Japanese/Korean runs (use for PO translation memories). Applies to `lexical`, `treesitter` and the hybrid lexical arm; `pi-serini` ignores it. Persisted and sticky like the other hyperparameters. `--auto` picks `cjk` when CJK characters are at least 10% of word characters |
 | `--force` | off | Rebuild even if a fresh (non-stale) cache already exists |
+| `--auto` | off | Auto-derive hyperparameters from corpus signals (see [`tune`](#tune)); explicit flags below still override |
+| `--target-chars N` | static default (see below) | Chunk-size bucket (`default_chars`) for files not matched by `--config-chars`/`--code-chars`. Prose files (`.md`, `.markdown`, `.rst`, `.txt`) use the separate `prose_chars` bucket and are not resized by this flag. Applies to every strategy |
+| `--config-chars N` | static default (see below) | Chunk-size bucket for config files (`config_chars`). Applies to every strategy |
+| `--code-chars N` | static default (see below) | Chunk-size bucket for tree-sitter-mapped code files (`code_chars`). Applies to every strategy |
+| `--ast-max-chars N` | static default (see below) | Maximum size of an AST chunk (`ast_max_chars`). Affects only the `treesitter` strategy's AST chunking; other strategies use the line chunker and ignore it |
+| `--bm25-k1 F` | static default (see below) | BM25 `k1` (`bm25_k1`). Used by `lexical`, `lexical+ctx`, `treesitter` and the hybrid lexical arm |
+| `--bm25-b F` | static default (see below) | BM25 `b` (`bm25_b`). Same strategies as `--bm25-k1` |
+| `--bit-width N` | static default (see below) | turbovec quantization bit width (`bit_width`). Used by `turbovec` and the hybrid dense arm |
+| `--embed-model NAME` | static default (see below) | Embedding model name (`model_name`). Used by `turbovec` and the hybrid dense arm |
+| `--lucene-k1 F` | static default (see below) | Lucene BM25 `k1` (`lucene_k1`). Used by `pi-serini` |
+| `--lucene-b F` | static default (see below) | Lucene BM25 `b` (`lucene_b`). Used by `pi-serini` |
 | `--no-pdf` | off | Exclude PDFs and every other sidecar-routed media suffix (captions, docx/pptx/xlsx/images, audio/video) from discovery — an escape hatch for the default auto-activated sidecar-extraction pipeline (see [Customize indexing](../how-to/customize-indexing.md#pdf-auto-indexing)). Persisted in the cache's meta, so it's sticky across later flag-less `index`/`query` calls |
 | `--allow-large-context` | off | Skip the `lexical+ctx` large-corpus guard (warns above 500 chunks, refuses above 2000 without this flag — each chunk costs one LLM call at index time) |
 
@@ -50,10 +69,44 @@ Indexing is **chunk**-granularity: `index` chunks every discovered file
 per chunk span, docid `"{path}:{start}-{end}"`. This is what lets `query`
 return file:line spans instead of whole-file docids.
 
+### Hyperparameters and precedence
+
+Precedence, highest first: an explicit flag, then the `--auto`-derived value,
+then the static default. Each strategy's meta records only the subset of keys
+it consumes (the chunking keys apply to all of them).
+
+| Key | Static default | Used by |
+| --- | --- | --- |
+| `prose_chars` (no flag; `--auto` only), `default_chars`, `config_chars`, `code_chars` | `400` | all strategies (chunking) |
+| `ast_max_chars` | `1200` | `treesitter` (AST chunking) |
+| `bm25_k1` / `bm25_b` | `1.5` / `0.75` | `lexical`, `lexical+ctx`, `treesitter`, hybrid lexical arm |
+| `tokenizer` | `plain` | `lexical`, `lexical+ctx`, `treesitter`, hybrid lexical arm |
+| `model_name` | `sentence-transformers/all-MiniLM-L6-v2` | `turbovec`, hybrid dense arm |
+| `bit_width` | `4` | `turbovec`, hybrid dense arm |
+| `lucene_k1` / `lucene_b` | `0.9` / `0.4` | `pi-serini` |
+
+- With neither `--auto` nor any hyperparameter flag, nothing is recorded in
+  the cache meta beyond the usual fields.
+- Hyperparameter flags given **without** `--auto` are layered over the
+  heuristics' empty-corpus fallbacks, which equal the static defaults above
+  except `config_chars`, which is `700`.
+- `--auto` additionally records `corpus_stats` (`n_chunks`,
+  `mean_chunk_tokens`, `chunk_token_cv`, `auto: true`) in the meta; `query
+  --auto` reads it.
+- Recorded `hyperparams` and `corpus_stats` are sticky: a later rebuild with
+  no `--auto` or flags (a plain `index` refresh, `--force`, or a
+  `query`-triggered reindex) reuses them.
+- When `--auto` or flags are given and the resolved values differ from the
+  ones recorded in a cache, that cache is stale and is rebuilt even without
+  `--force`.
+
+See [Tune hyperparameters](../how-to/customize-indexing.md#tune-hyperparameters)
+for the heuristics and a workflow.
+
 ### Default (`all`) — build every strategy in one pass
 
 With no `--retriever` (or `--retriever all`), `index` builds each strategy in
-`lexical`, `turbovec`, `pi-serini`, `hybrid` — deliberately excluding
+`lexical`, `turbovec`, `pi-serini`, `hybrid`, `treesitter` — deliberately excluding
 `lexical+ctx`, since it shares the `lexical` cache slot and costs LLM tokens.
 For each strategy, in order: if a fresh cache exists and `--force` wasn't
 passed, prints `<name>: up to date (use --force to rebuild)` and moves on;
@@ -62,14 +115,22 @@ otherwise it builds and persists that strategy, printing
 prints `<name>: skipped (<reason>)` **instead of failing** — this is the
 "graceful degradation" mode: the whole run still exits `0` as long as the
 always-available `lexical` strategy itself built (or was already fresh).
-A final `-> <cache-dir>` line is printed. Sample output when `turbovec` is
-uninstalled:
+A final `-> <cache-dir>` line is printed. Within one run, `hybrid` adopts the
+`turbovec` (and `lexical`) arms built earlier in the same run instead of
+re-embedding, when they indexed the same documents and are compatible (same
+lexical parameters; same embedding model and `bit_width`); otherwise it does
+a full build. If `turbovec` was already up to date (not rebuilt in this run),
+`hybrid` also builds fully. The corpus is loaded and fingerprinted once per
+run, and the up-to-date check reads only the cache meta and the first 4 KB of
+the data file (see [Freshness check](persistence-and-cache.md#freshness-check-fast-path)).
+Sample output when `turbovec` is uninstalled:
 
 ```
 lexical: indexed 118 chunks
 turbovec: skipped (turbovec retriever needs the 'turbovec' + 'local' extras:)
 pi-serini: indexed 118 chunks
 hybrid: skipped (turbovec retriever needs the 'turbovec' + 'local' extras:)
+treesitter: indexed 131 chunks
 -> /home/user/project/.agentic-retrieval
 ```
 
@@ -79,7 +140,7 @@ the full message including the exact install command.
 
 ### Single strategy (`--retriever <name>`)
 
-Pass an explicit `--retriever lexical|lexical+ctx|turbovec|pi-serini|hybrid`
+Pass an explicit `--retriever lexical|lexical+ctx|turbovec|pi-serini|hybrid|treesitter`
 to build just one strategy. This form does **not** degrade gracefully:
 without `--force`, if a fresh cache already exists for the chosen retriever,
 `index` skips the rebuild and prints `<retriever> index up to date -> <dir>
@@ -102,7 +163,9 @@ Search the persisted index for a project root.
 | `query` (positional) | — | Query text (required) |
 | `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to search |
 | `--retriever {all,lexical,lexical+ctx,turbovec,pi-serini,hybrid,treesitter}` | **`all`** | `all` (default) consolidates every available strategy; a single name queries just that strategy |
-| `--top-k N` | `5` | Number of results |
+| `--top-k N` | `5` (or the `--auto` estimate) | Number of results |
+| `--auto` | off | Resolve `--top-k` as `clamp(round(1500 / mean_chunk_tokens), 5, 30)` from the index's recorded `corpus_stats` (`5` if missing). Ignored when `--top-k` is given; never re-derives index-time hyperparameters (those come from the cache's own meta) |
+| `--pool N` | derived from `--top-k` | Consolidated mode only: per-retriever candidate-pool depth. Default comes from `retrieval.fusion.candidate_pool` |
 | `--json` | off | Emit JSON instead of plain text (shape depends on `--retriever`; see "Output formats" below) |
 | `--stale-ok` | off | Search the cached index even if it's stale, instead of auto-reindexing |
 | `--weights "name:w,..."` | none | Consolidated mode only: per-retriever RRF weight override (unlisted retrievers default to `1.0`) |
@@ -147,7 +210,44 @@ cached retriever, blank-line separated), without searching or rebuilding.
 Prints `retriever`, `root`, `chunks` (chunk count), `files` (distinct
 source-file count), `created`, `engine`, `stale`, and `cache` (the on-disk
 directory) per cached retriever. If no cache exists, prints
-`no cache for <root> (dir=<cache-dir>)` and returns exit code 0.
+`no cache for <root> (dir=<cache-dir>)` and returns exit code 0. When the
+cache recorded them (built with `--auto` or a hyperparameter flag), it also
+prints `hyperparams: {...}` and `corpus_stats: {...}` lines.
+
+## `tune`
+
+Preview the hyperparameters `index --auto` would pick for a project root.
+It writes no index cache or meta, but it is not strictly read-only: signal collection calls `ensure_sidecar()`, which can write extracted-transcript sidecar files and their manifest under `<project-root>/.agentic-retrieval/extracted/`.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--root ROOT` | `RETRIEVAL_ROOT` env, then cwd | Project root to analyze |
+| `--json` | off | Emit a JSON report instead of text |
+
+Text output:
+
+```
+signals: n_files=.. code_fraction=.. cjk_fraction=..
+n_chunks=.. mean_chunk_tokens=.. chunk_token_cv=..
+proposed params (vs. static defaults):
+  <key>: <value>
+  ...
+warning: ...
+```
+
+The `<key>: <value>` lines are sorted by key; `warning:` appears only when
+set. With `--json` the report is `{"signals": {...}, "params": {...},
+"warning": <str|null>}`. `signals` holds `n_files`, `ext_histogram`,
+`total_bytes`, `code_bytes`, `code_fraction`, `median_code_lines`,
+`n_chunks`, `mean_chunk_tokens`, `chunk_token_cv`, `p10_chunk_tokens`,
+`p50_chunk_tokens`, `p90_chunk_tokens` and `cjk_fraction`; `params` holds the
+twelve keys listed under [Hyperparameters and precedence](#hyperparameters-and-precedence)
+(`prose_chars` included). The warning is advisory only: it fires when the
+10th-percentile chunk size is below 15 tokens (chunks may be sliced too
+finely), and nothing is auto-corrected.
+
+The per-parameter rules are in
+[Tune hyperparameters](../how-to/customize-indexing.md#tune-hyperparameters).
 
 ## `eval`
 
@@ -166,6 +266,7 @@ schema and how to read the metrics.
 | `--warm-runs N` | `5` | Number of extra warm search repeats per query |
 | `--json` | off | Emit a JSON report instead of text |
 | `--output PATH` | none | Also write the JSON report to `PATH` |
+| `--auto` | off | Derive hyperparameters from the eval corpus; recorded in the report as `auto_params` (text mode prints an `auto_params: {...}` line after the report) |
 
 Builds every strategy in `lexical`, `turbovec`, `pi-serini`, `hybrid`,
 `treesitter` over the query set's corpus, skipping (not hard-failing) any
@@ -327,7 +428,10 @@ argument-parsing error
   should skip lines starting with spaces.
 - `query --output PATH` (consolidated mode only): also writes the
   `--json` envelope to `PATH`.
-- `stats`: a fixed set of `key: value` lines to stdout.
+- `stats`: a fixed set of `key: value` lines to stdout (plus `hyperparams`
+  and `corpus_stats` lines when recorded).
+- `tune`: text lines, or with `--json` a `{"signals", "params", "warning"}`
+  envelope (see [`tune`](#tune)).
 
 ## `retrieval mcp`
 
@@ -353,3 +457,5 @@ directory, if neither is given. (`retrieval mcp` additionally consults
 - [Persistence and cache](persistence-and-cache.md)
 - [Environment variables](environment-variables.md)
 - [Index and query how-to](../how-to/index-and-query.md)
+- [Tune hyperparameters](../how-to/customize-indexing.md#tune-hyperparameters)
+- [MCP server](../how-to/integrate-coding-agents.md#mcp-server)

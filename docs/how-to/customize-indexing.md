@@ -197,6 +197,66 @@ print(len(docs), sorted(record_loaders.registered_suffixes()))
 PY
 ```
 
+## Tune hyperparameters
+
+By default every strategy uses fixed hyperparameters (chunk sizes, BM25
+`k1`/`b`, embedding model, and so on). `retrieval tune` derives better
+values from your corpus, and `index --auto` applies them.
+
+```bash
+# 1. Preview: writes no index cache (may write extracted-transcript sidecars and their manifest)
+uv run --project engine --extra all retrieval tune --root "$PROJECT_ROOT"
+
+# 2. Build with the derived values
+uv run --project engine --extra all retrieval index --root "$PROJECT_ROOT" --auto
+
+# 3. See what was recorded (hyperparams and corpus_stats lines)
+uv run --project engine --extra all retrieval stats --root "$PROJECT_ROOT"
+
+# Override one value; everything else stays auto-derived
+uv run --project engine --extra all retrieval index --root "$PROJECT_ROOT" --auto --code-chars 800
+```
+
+`tune` measures two things: filesystem signals (file extensions, the share of
+bytes in tree-sitter-mapped code files as `code_fraction`, the CJK share of
+word characters as `cjk_fraction`, median code-file length) and chunk-token
+statistics after chunking (mean, coefficient of variation, p10/p50/p90). The
+rules:
+
+| Parameter | Rule | Static default |
+| --- | --- | --- |
+| `tokenizer` | `cjk` if `cjk_fraction` >= 0.1 (wins over code); else `code` if `code_fraction` > 0.3; else `plain` | `plain` |
+| `prose_chars` / `default_chars` | `400` | `400` |
+| `config_chars` | `700` | `400` |
+| `code_chars` | `1200` if `code_fraction` > 0.3, else `400` | `400` |
+| `ast_max_chars` (`treesitter` only) | `2000` if the median code file exceeds 400 lines, else `1200` | `1200` |
+| `bm25_k1` | `1.2` if `code_fraction` > 0.6; `1.5` if >= 0.2; `1.8` if median chunk tokens > 150; else `1.5` | `1.5` |
+| `bm25_b` | `1.0` if chunk-size CV > 1.2 or p90/p50 > 4; `0.75` if CV >= 0.4; else `0.3`; `0.75` without chunk stats | `0.75` |
+| `model_name` | `flax-sentence-embeddings/st-codesearch-distilroberta-base` if `code_fraction` > 0.6; `sentence-transformers/all-mpnet-base-v2` if <= 2000 chunks; else `sentence-transformers/all-MiniLM-L6-v2` | `sentence-transformers/all-MiniLM-L6-v2` |
+| `bit_width` | `4`, `3` or `2` as chunks x embedding dimensions is <= 5e7, <= 5e8 or larger | `4` |
+| `lucene_k1` / `lucene_b` | `0.9` / `0.4` | `0.9` / `0.4` |
+
+Things to know:
+
+- **Precedence**: an explicit flag beats the `--auto` value, which beats the
+  static default.
+- **Flags without `--auto`** are layered over the heuristics' empty-corpus
+  fallbacks, which match the static defaults except `config_chars` = `700`.
+- **Sticky**: recorded `hyperparams` and `corpus_stats` are reused by later
+  rebuilds that pass no `--auto` or flags (including a `query`-triggered
+  reindex).
+- **Re-tuning rebuilds**: passing `--auto` or flags whose resolved values
+  differ from a cache's recorded ones makes that cache stale, so it is rebuilt
+  without `--force`.
+- **Thin chunks**: `tune` warns (advisory only) when the p10 chunk size is
+  below 15 tokens.
+- **`query --auto`** only picks `--top-k` from the recorded `corpus_stats`; it
+  never re-derives index-time values.
+- **`eval --auto`** derives parameters from the eval corpus and records them
+  as `auto_params` (see [Evaluate retrievers](evaluate-retrievers.md)).
+- **MCP**: `index_project(auto=True)` exposes `--auto` only, not the
+  per-hyperparameter flags.
+
 ## Extend, don't replace
 
 Extend a `DEFAULT_*` constant with `|` rather than replacing it, so you keep
@@ -248,4 +308,5 @@ Full kwargs reference and more examples:
 ## Next steps
 
 - [Reference: project_loader API](../reference/api/project_loader.md)
+- [CLI reference: tune](../reference/cli.md#tune)
 - [Architecture](../concepts/architecture.md)
