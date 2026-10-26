@@ -18,7 +18,7 @@ no-`uv` fallback.
   want to index audio/video media — see
   [Transcribe audio and video](transcribe-audio-video.md).
 - Network access, only for the optional `remote` / `local` / `turbovec` /
-  `pyserini` extras — the core install is fully offline.
+  `pyserini` / `mcp` extras — the core install is fully offline.
 
 ## Install path A (primary) — local marketplace
 
@@ -92,8 +92,8 @@ Then check it landed:
 /plugin
 ```
 
-Under **Installed**, `agentic-retrieval` should show 1 command and 5
-skills.
+Under **Installed**, `agentic-retrieval` should show 1 command (`/retrieval`), 7
+skills, 1 agent (`retrieval-tracer`) and 1 MCP server (`retrieval`).
 
 Invoke it either namespaced...
 
@@ -122,6 +122,7 @@ this once:
 This runs `uv sync --project "${CLAUDE_PLUGIN_ROOT}/engine" --extra all` —
 one command syncs the offline core plus every optional extra. `uv sync` is
 idempotent, so re-running `/retrieval setup` later is always safe.
+`--extra all` includes the `mcp` extra the MCP server needs.
 
 !!! note
     If the full sync fails on a heavy extra (most often `pyserini`, which
@@ -137,6 +138,26 @@ pins the resulting environment via `UV_PROJECT_ENVIRONMENT`, defaulting to
 `$HOME/.cache/agentic-retrieval/uv-venv` — no action needed on your part
 either way. See [environment variables](../reference/environment-variables.md)
 for the full list.
+
+## MCP server
+
+The plugin registers an MCP server named `retrieval` through the `mcpServers`
+entry in `.claude-plugin/plugin.json` — there is nothing to configure. Claude
+Code launches `scripts/retrieval-mcp.sh`, which:
+
+- needs `uv` on `PATH` (it exits with an error otherwise);
+- uses the same `UV_PROJECT_ENVIRONMENT` as `/retrieval setup` (default
+  `$HOME/.cache/agentic-retrieval/uv-venv`);
+- adds the `mcp` extra on launch (`uv run ... --extra mcp retrieval mcp`), so
+  it works even before `/retrieval setup`; the first start can take longer
+  while `uv` syncs.
+
+It serves the project in `CLAUDE_PROJECT_DIR` (root order: `--root`, then
+`RETRIEVAL_ROOT`, then `CLAUDE_PROJECT_DIR`, then cwd). Its tools appear in
+Claude Code as `mcp__plugin_agentic-retrieval_retrieval__*`. See
+[MCP server](integrate-coding-agents.md#mcp-server) for the tools and
+[MCP troubleshooting](../reference/troubleshooting.md#mcp-server) if it does
+not start.
 
 ## Uninstall / disable
 

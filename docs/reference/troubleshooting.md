@@ -17,11 +17,23 @@
 In the `pi-serini` row above, both spellings are correct: `pi-serini` is
 the retriever key, `pyserini` is the Python library/extra it needs.
 
-For anything not covered here, the four knowledge skills
+For anything not covered here, the five knowledge skills
 (`skills/lexical-retrieval-usage`, `skills/dense-retrieval-usage`,
-`skills/lucene-retrieval-usage`, `skills/hybrid-retrieval-usage`) each have
-a "Graceful degradation" section with the exact failure modes for that
-method.
+`skills/lucene-retrieval-usage`, `skills/code-retrieval-usage`,
+`skills/hybrid-retrieval-usage`) each have a "Graceful degradation" section
+with the exact failure modes for that method.
+
+## MCP server
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| stderr: `agentic-retrieval MCP server needs the 'mcp' extra: ...`, exit code 1 | `retrieval mcp` was run without the `mcp` extra synced | `uv sync --project engine --extra mcp` (or `--extra all`), or launch through `scripts/retrieval-mcp.sh`, which adds the extra |
+| stderr: `agentic-retrieval MCP: 'uv' not found on PATH` | `scripts/retrieval-mcp.sh` can't find `uv` | Install `uv`, make it visible to Claude Code's environment, and restart |
+| Search results come only from `lexical`; the other strategies are listed in `skipped` with `not indexed - call index_project(...)` | Those strategies' caches haven't been built | Call `index_project(retriever='all')` (slow on large repos, one-off) or run `retrieval index` from the CLI |
+| `error_type: BuildInProgress` | Another `index_project` build is already running | Poll `index_status` and retry when it finishes. Searches in the meantime use the existing caches, report `build_in_progress: true` and skip `pi-serini`. A build can't be cancelled from MCP; stop the server process to abort it |
+| `error_type: OptInRequired` | `lexical+ctx` (paid LLM contextualizer) is never built through MCP; `lexical`/`all` builds also refuse when the lexical cache slot holds a `lexical+ctx` index | Build it from the CLI after explicit opt-in: `retrieval index --retriever lexical+ctx` |
+| Results report `stale` cache names and a hint to refresh | With the default `stale_ok=None`, only the plain `lexical` cache is refreshed; heavy caches are searched as-is | Call `index_project` to refresh, or pass `stale_ok=False` to search |
+| The server indexes the wrong directory | Root resolution picked up a different directory | Check the `agentic-retrieval MCP: root=...` line on stderr; set `RETRIEVAL_ROOT` or pass `--root` (order: `--root`, `RETRIEVAL_ROOT`, `CLAUDE_PROJECT_DIR`, cwd) |
 
 ## Plugin install
 
@@ -35,3 +47,4 @@ method.
 - [Index and query how-to](../how-to/index-and-query.md)
 - [Install the plugin](../how-to/install.md)
 - [Environment variables](environment-variables.md)
+- [MCP server](../how-to/integrate-coding-agents.md#mcp-server)
