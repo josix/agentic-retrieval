@@ -25,6 +25,7 @@ serves the same query/index machinery to an agent over MCP stdio
 """
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -51,6 +52,7 @@ from retrieval.persistence import (
     fingerprint_memoized,
     index_dir,
     is_stale,
+    iter_embedding_seeds,
     load_index,
     loader_kw_from_meta,
     read_meta,
@@ -319,7 +321,14 @@ def _make_retriever(
     if retriever_name == "pi-serini":
         ctor_kwargs = resolve_ctor_kwargs("pi-serini", PiSeriniRetriever, params)
         return PiSeriniRetriever(index_path=index_dir(root) / "lucene", **ctor_kwargs)
-    return build_retriever(retriever_name, params)
+    retriever = build_retriever(retriever_name, params)
+    # Dense retrievers reuse embeddings from the previous cache (read lazily,
+    # before it is overwritten).
+    setter = getattr(retriever, "set_embedding_seed", None)
+    if setter is not None:
+        prefer = "hybrid" if retriever_name == "hybrid" else "turbovec"
+        setter(functools.partial(iter_embedding_seeds, root, prefer))
+    return retriever
 
 
 def _loader_kw_from_args(args: argparse.Namespace) -> Dict[str, Any]:

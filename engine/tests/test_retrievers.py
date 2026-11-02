@@ -4,7 +4,10 @@ Uses a synthetic in-memory corpus so the lexical retrievers are exercised
 without any dataset download.
 """
 
+import hashlib
+import json
 import unittest
+from unittest import mock
 
 from retrieval.document import Document
 from retrieval.retrievers import (
@@ -13,8 +16,16 @@ from retrieval.retrievers import (
     HybridRetriever,
     LexicalRetriever,
     TreeSitterRetriever,
+    TurbovecRetriever,
     build_retriever,
 )
+
+try:
+    import numpy as np
+
+    _NUMPY_INSTALLED = True
+except ImportError:
+    _NUMPY_INSTALLED = False
 
 try:
     import turbovec  # noqa: F401
@@ -429,3 +440,197 @@ class TestHybridAdoptArms(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_DIM = 64
+
+
+class _FakeST:
+    """Deterministic embedder: unit vector seeded from sha256(text)."""
+
+    encode_calls: list = []
+    instances = 0
+
+    def __init__(self, name):
+        type(self).instances += 1
+
+    def encode(self, texts, **_kw):
+        type(self).encode_calls.append(list(texts))
+        rows = []
+        for t in texts:
+            seed = int.from_bytes(hashlib.sha256(t.encode()).digest()[:8], "little")
+            v = np.random.default_rng(seed).standard_normal(_DIM)
+            rows.append(v / np.linalg.norm(v))
+        return np.array(rows, dtype=np.float64).reshape(len(texts), _DIM)
+
+
+class _FakeTQI:
+    def __init__(self, dim, bit_width):
+        self.dim = dim
+        self.data = np.zeros((0, dim), dtype=np.float32)
+
+    def add(self, vectors):
+        self.data = np.vstack([self.data, vectors])
+
+    def search(self, q, k):
+        scores = q @ self.data.T
+        order = np.argsort(-scores, axis=1)[:, :k]
+        return np.take_along_axis(scores, order, axis=1), order
+
+
+def _chunk_docs(texts):
+    return [
+        Document(f"f.py:{i}-{i}", t, source_path="f.py", start_line=i, end_line=i)
+        for i, t in enumerate(texts, 1)
+    ]
+
+
+@unittest.skipUnless(_NUMPY_INSTALLED, "numpy not installed")
+class TestTurbovecIncremental(unittest.TestCase):
+    def setUp(self) -> None:
+        _FakeST.encode_calls = []
+        _FakeST.instances = 0
+        patcher = mock.patch.object(
+            TurbovecRetriever, "_require_backends", return_value=(_FakeST, _FakeTQI)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _build(self, texts, seed=None):
+        r = TurbovecRetriever(model_name="m")
+        if seed is not None:
+            r.set_embedding_seed(lambda: seed)
+        r.index(_chunk_docs(texts))
+        return r
+
+    def test_first_build_dedups_and_holds_ndarray(self) -> None:
+        r = self._build(["a", "b", "a"])
+        self.assertEqual(_FakeST.encode_calls, [["a", "b"]])
+        self.assertIsInstance(r._vectors, np.ndarray)
+        self.assertEqual(r._vectors.dtype, np.float32)
+        self.assertEqual(r._vectors.shape, (3, _DIM))
+        self.assertEqual(r._vectors[0].tobytes(), r._vectors[2].tobytes())
+
+    def test_rebuild_encodes_only_changed_and_new(self) -> None:
+        r1 = self._build(["one", "two", "three"])
+        _FakeST.encode_calls = []
+        r2 = self._build(["one", "TWO!", "three", "four"], seed=r1.to_dict())
+        self.assertEqual(_FakeST.encode_calls, [["TWO!", "four"]])
+        self.assertEqual(r2._reuse_stats, {"reused": 2, "encoded": 2})
+
+    def test_reused_vectors_byte_identical_incl_json_roundtrip(self) -> None:
+        r1 = self._build(["one", "two", "three"])
+        seed = json.loads(json.dumps(r1.to_dict()))
+        r2 = self._build(["three", "new", "one"], seed=seed)
+        self.assertEqual(r2._vectors[0].tobytes(), r1._vectors[2].tobytes())
+        self.assertEqual(r2._vectors[2].tobytes(), r1._vectors[0].tobytes())
+        restored = TurbovecRetriever.from_dict(json.loads(json.dumps(r2.to_dict())))
+        self.assertEqual(restored._vectors.tobytes(), r2._vectors.tobytes())
+
+    def test_zero_misses_skips_embedder_until_search(self) -> None:
+        r1 = self._build(["one", "two"])
+        _FakeST.encode_calls = []
+        _FakeST.instances = 0
+        r2 = self._build(["two", "one"], seed=r1.to_dict())
+        self.assertEqual(_FakeST.encode_calls, [])
+        self.assertEqual(_FakeST.instances, 0)
+        self.assertEqual(r2.search("one", 1), ["f.py:2-2"])
+        self.assertEqual(_FakeST.instances, 1)
+
+    def test_unusable_seeds_fall_back_to_full_encode(self) -> None:
+        r1 = self._build(["one", "two"])
+        good = r1.to_dict()
+        v2 = {k: v for k, v in good.items() if k != "text_sha256"}
+        v2["vectors"] = r1._vectors.tolist()
+        seeds = [
+            dict(good, model_name="other"),
+            v2,
+            dict(good, vectors=dict(good["vectors"], data="!!")),
+            {"garbage": 1},
+        ]
+        for seed in seeds:
+            _FakeST.encode_calls = []
+            self._build(["one", "two"], seed=seed)
+            self.assertEqual(_FakeST.encode_calls, [["one", "two"]])
+        r = TurbovecRetriever(model_name="m")
+
+        def boom():
+            raise OSError("nope")
+
+        r.set_embedding_seed(boom)
+        r.index(_chunk_docs(["one"]))
+        self.assertEqual(r._reuse_stats["encoded"], 1)
+
+    def test_v3_round_trip_is_ndarray_not_list(self) -> None:
+        r = self._build(["one", "two", "three"])
+        data = json.loads(json.dumps(r.to_dict()))
+        self.assertEqual(list(data)[0], "schema")
+        self.assertIsInstance(data["vectors"], dict)
+        restored = TurbovecRetriever.from_dict(data)
+        v = restored._vectors
+        self.assertNotIsInstance(v, list)
+        self.assertEqual(v.dtype, np.float32)
+        self.assertTrue(v.flags["C_CONTIGUOUS"])
+        self.assertTrue(v.flags["WRITEABLE"])
+        self.assertEqual(restored._text_hashes, r._text_hashes)
+
+    def test_v3_malformed_payloads_raise_value_error(self) -> None:
+        good = self._build(["one", "two"]).to_dict()
+        bad_payloads = [
+            dict(good, vectors=dict(good["vectors"], data="@@@@")),
+            dict(good, vectors=dict(good["vectors"], data=None)),
+            dict(good, vectors=dict(good["vectors"], shape=[2, _DIM + 1])),
+            dict(good, vectors=dict(good["vectors"], shape=[3, _DIM])),
+            dict(good, vectors=dict(good["vectors"], encoding="hex")),
+            dict(good, text_sha256=["x"]),
+        ]
+        for bad in bad_payloads:
+            with self.assertRaises(ValueError):
+                TurbovecRetriever.from_dict(bad)
+
+    def test_seed_iterable_skips_incompatible_candidates(self) -> None:
+        other = TurbovecRetriever(model_name="other")
+        other.index(_chunk_docs(["one", "two"]))
+        mine = self._build(["one", "two"]).to_dict()
+        _FakeST.encode_calls = []
+        r = TurbovecRetriever(model_name="m")
+        r.set_embedding_seed(lambda: iter([other.to_dict(), mine]))
+        r.index(_chunk_docs(["one", "two", "new"]))
+        self.assertEqual(_FakeST.encode_calls, [["new"]])
+
+    def test_v2_cache_loads_without_reuse_and_saves_v3(self) -> None:
+        r = self._build(["one", "two"])
+        v2 = {
+            "schema": 2, "model_name": "m", "bit_width": 4, "docids": r._docids,
+            "units": r._units, "vectors": r._vectors.tolist(),
+        }
+        restored = TurbovecRetriever.from_dict(v2)
+        self.assertIsInstance(restored._vectors, np.ndarray)
+        self.assertIsNone(restored._text_hashes)
+        out = restored.to_dict()
+        self.assertEqual(out["schema"], 3)
+        self.assertNotIn("text_sha256", out)
+        with self.assertRaises(ValueError):
+            TurbovecRetriever.from_dict(dict(v2, schema=1))
+
+
+class TestHybridEmbeddingSeed(unittest.TestCase):
+    def test_seed_forwarded_to_dense_and_stub_tolerated(self) -> None:
+        dense = TurbovecRetriever()
+        HybridRetriever(dense=dense).set_embedding_seed(lambda: None)
+        self.assertIsNotNone(dense._seed_provider)
+        HybridRetriever(dense=_StubDense()).set_embedding_seed(lambda: None)
+
+    def test_hybrid_loadable_schemas(self) -> None:
+        h = HybridRetriever(dense=_StubDense())
+        h.index(_documents())
+        data = h.to_dict()
+        self.assertEqual(data["schema"], 4)
+        for schema in (3, 4):
+            restored_schema = dict(data, schema=schema)
+            with mock.patch.object(
+                TurbovecRetriever, "from_dict", return_value=_StubDense()
+            ):
+                HybridRetriever.from_dict(restored_schema)
+        with self.assertRaises(ValueError):
+            HybridRetriever.from_dict(dict(data, schema=2))

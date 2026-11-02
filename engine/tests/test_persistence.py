@@ -21,6 +21,8 @@ if str(_ROOT_DIR) not in sys.path:
 
 from unittest import mock  # noqa: E402
 
+from test_retrievers import _DIM, _NUMPY_INSTALLED, _chunk_docs, _FakeST, _FakeTQI  # noqa: E402
+
 from retrieval import extractors  # noqa: E402
 from retrieval.bm25 import BM25Index  # noqa: E402
 from retrieval.document import Document  # noqa: E402
@@ -31,6 +33,8 @@ from retrieval.persistence import (  # noqa: E402
     compute_fingerprint,
     index_dir,
     is_stale,
+    iter_embedding_seeds,
+    load_embedding_seed,
     load_index,
     loader_kw_from_meta,
     project_key,
@@ -50,6 +54,9 @@ from retrieval.retrievers import (  # noqa: E402
     TurbovecRetriever,
 )
 from retrieval.tfidf import TfidfIndex  # noqa: E402
+
+if _NUMPY_INSTALLED:
+    import numpy as np
 
 try:
     import turbovec  # noqa: F401
@@ -747,9 +754,21 @@ class TestMetaOnlyFreshness(unittest.TestCase):
             self.assertFalse(cache_is_loadable(self.root, "turbovec"))
         with mock.patch(target, return_value=object()):
             self.assertTrue(cache_is_loadable(self.root, "turbovec"))
+        self._write_turbovec(2)
+        with mock.patch(target, return_value=object()):
+            self.assertTrue(cache_is_loadable(self.root, "turbovec"))
         self._write_turbovec(1)
         with mock.patch(target, return_value=object()):
             self.assertFalse(cache_is_loadable(self.root, "turbovec"))
+
+    def test_cache_is_loadable_hybrid_schemas(self) -> None:
+        directory = index_dir(self.root)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = "retrieval.persistence.importlib.util.find_spec"
+        for schema, expected in ((2, False), (3, True), (4, True), (5, False)):
+            (directory / "hybrid.json").write_text(json.dumps({"schema": schema}), encoding="utf-8")
+            with mock.patch(target, return_value=object()):
+                self.assertEqual(cache_is_loadable(self.root, "hybrid"), expected, schema)
 
     def test_cache_is_loadable_pi_serini_checks_lucene_dir(self) -> None:
         directory = index_dir(self.root)
@@ -919,3 +938,124 @@ class TestAgentSidecarFingerprint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEmbeddingSeedAndBinaryVectors(unittest.TestCase):
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        _write(self.root / "a.txt", "alpha")
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+        self.addCleanup(self._project_tmp.cleanup)
+        self.addCleanup(self._cache_tmp.cleanup)
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+
+    def _put(self, name: str, text: str) -> None:
+        directory = index_dir(self.root)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(text, encoding="utf-8")
+
+    def test_seed_none_without_cache(self) -> None:
+        self.assertIsNone(load_embedding_seed(self.root))
+
+    def test_seed_from_turbovec_json(self) -> None:
+        payload = {"schema": 3, "model_name": "m", "text_sha256": ["h"], "vectors": {}}
+        self._put("turbovec.json", json.dumps(payload))
+        self.assertEqual(load_embedding_seed(self.root), payload)
+
+    def test_seed_skips_v2_without_parsing_body(self) -> None:
+        self._put("turbovec.json", '{"schema": 2, "model_name": "m", GARBAGE')
+        self.assertIsNone(load_embedding_seed(self.root))
+
+    def test_seed_falls_back_to_hybrid_dense(self) -> None:
+        dense = {"schema": 3, "model_name": "m", "text_sha256": ["h"], "vectors": {}}
+        self._put("hybrid.json", json.dumps({"schema": 4, "dense": dense}))
+        self.assertEqual(load_embedding_seed(self.root), dense)
+
+    def test_seed_prefer_selects_retriever_and_yields_both(self) -> None:
+        tv = {"schema": 3, "model_name": "tv", "text_sha256": ["h"], "vectors": {}}
+        dense = {"schema": 3, "model_name": "hy", "text_sha256": ["h"], "vectors": {}}
+        self._put("turbovec.json", json.dumps(tv))
+        self._put("hybrid.json", json.dumps({"schema": 4, "dense": dense}))
+        self.assertEqual(load_embedding_seed(self.root), tv)
+        self.assertEqual(load_embedding_seed(self.root, "hybrid"), dense)
+        self.assertEqual(list(iter_embedding_seeds(self.root, "hybrid")), [dense, tv])
+
+    def test_seed_corrupt_or_hashless_returns_none(self) -> None:
+        self._put("turbovec.json", '{"schema": 3, "model_name": "m", broken')
+        self._put("hybrid.json", json.dumps({"schema": 4, "dense": {"schema": 3}}))
+        self.assertIsNone(load_embedding_seed(self.root))
+
+    @unittest.skipUnless(_NUMPY_INSTALLED, "numpy not installed")
+    def test_save_load_round_trip_returns_ndarray(self) -> None:
+        with mock.patch.object(
+            TurbovecRetriever, "_require_backends", return_value=(_FakeST, _FakeTQI)
+        ):
+            r = TurbovecRetriever(model_name="m")
+            r.index(_chunk_docs([f"text {i}" for i in range(2000)]))
+            save_index(r, self.root, "fp", "turbovec", "0.0.0")
+            data = json.loads((index_dir(self.root) / "turbovec.json").read_text())
+            self.assertIsInstance(data["vectors"], dict)
+            restored, _meta = load_index(self.root, "turbovec")
+        self.assertIs(type(restored._vectors), np.ndarray)
+        self.assertEqual(restored._vectors.tobytes(), r._vectors.tobytes())
+
+    @unittest.skipUnless(_NUMPY_INSTALLED, "numpy not installed")
+    def test_v2_turbovec_json_loads_via_load_index(self) -> None:
+        vecs = np.random.default_rng(0).standard_normal((3, _DIM)).astype(np.float32)
+        units = [
+            {"docid": f"f:{i}", "source_path": "f", "start_line": i, "end_line": i, "context": None}
+            for i in range(3)
+        ]
+        v2 = {"schema": 2, "model_name": "m", "bit_width": 4,
+              "docids": [u["docid"] for u in units], "units": units, "vectors": vecs.tolist()}
+        self._put("turbovec.json", json.dumps(v2))
+        self._put("turbovec.meta.json", json.dumps({"fingerprint": "fp"}))
+        with mock.patch.object(
+            TurbovecRetriever, "_require_backends", return_value=(_FakeST, _FakeTQI)
+        ):
+            loaded = load_index(self.root, "turbovec")
+        self.assertIsNotNone(loaded)
+        self.assertIsNone(loaded[0]._text_hashes)
+        self.assertIs(type(loaded[0]._vectors), np.ndarray)
+
+    @unittest.skipUnless(
+        _NUMPY_INSTALLED and os.environ.get("RETRIEVAL_PERF_TESTS"),
+        "set RETRIEVAL_PERF_TESTS=1 (needs numpy) to run the 64k-chunk load benchmark",
+    )
+    def test_64k_chunk_cache_loads_under_5s(self) -> None:
+        import time
+
+        n, dim = 63_714, 384
+        vecs = np.random.default_rng(1).standard_normal((n, dim)).astype(np.float32)
+        vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
+        docids = [f"f{i}.py:1-2" for i in range(n)]
+        units = [{"docid": d, "source_path": d.split(":")[0], "start_line": 1,
+                  "end_line": 2, "context": None} for d in docids]
+        backends = [(_FakeST, _FakeTQI)]
+        if _TURBOVEC_INSTALLED:
+            from turbovec import TurboQuantIndex
+
+            backends.append((_FakeST, TurboQuantIndex))
+        for backend in backends:
+            with mock.patch.object(TurbovecRetriever, "_require_backends", return_value=backend):
+                r = TurbovecRetriever(model_name="m")
+                r._docids, r._units, r._vectors = docids, units, vecs
+                r._text_hashes = [hashlib.sha256(d.encode()).hexdigest() for d in docids]
+                r._index = object()
+                save_index(r, self.root, "fp", "turbovec", "0.0.0")
+                start = time.perf_counter()
+                loaded = load_index(self.root, "turbovec")
+                elapsed = time.perf_counter() - start
+            print(f"64k load with {backend[1].__name__}: {elapsed:.2f}s")
+            self.assertIsNotNone(loaded)
+            self.assertIs(type(loaded[0]._vectors), np.ndarray)
+            self.assertLess(elapsed, 5.0)
