@@ -8,6 +8,18 @@ both.
 
 ## Unreleased
 
+- **\[engine\] Incremental embeddings** -- `turbovec` and `hybrid` rebuilds
+  reuse vectors for unchanged chunks, keyed by `(model_name,
+  sha256(chunk text))`, and encode only new or changed chunks (a one-file
+  change no longer re-embeds the whole corpus).
+- **\[engine\] Binary vectors** -- turbovec cache schema 2 -> 3 (hybrid 3 -> 4):
+  vectors are stored as base64 float32 and held as a NumPy array, not JSON
+  float lists (64k x 384 cache loads in under 1 s in testing). Older caches
+  still load and serve queries; the next rebuild re-embeds once and writes
+  the new schema.
+- **\[docs\]** Document embedding reuse and the v2 -> v3 cache schema in
+  `reference/persistence-and-cache.md`.
+
 ## 0.13.0 — 2026-10-25
 
 - **\[engine\] MCP server** -- new `retrieval mcp` subcommand (and

@@ -45,8 +45,10 @@ state is plain `LexicalRetriever` data (the LLM context is baked into the
 indexed text at build time); the meta's `retriever_name` records which of
 the two built it last. `pi-serini` additionally keeps its binary Lucene
 segments in a `lucene/` subdirectory of the same cache dir — its JSON file
-only points at them. `turbovec` (and `hybrid`'s dense arm) persists docids
-plus the raw embedding vectors and rebuilds the quantized ANN index on load.
+only points at them. `turbovec` (and `hybrid`'s dense arm) persists docids,
+units, a per-chunk `text_sha256` list and the raw embedding vectors (base64
+little-endian float32, held in memory as a NumPy array) and rebuilds the
+quantized ANN index on load.
 `cached_retrievers(root)` returns a `{name: meta}` map of every parsable
 cache slot for a root.
 
@@ -109,11 +111,23 @@ half-written cache file for a future `load_index` to trip over — a
 corrupt/incomplete JSON file causes `load_index` to return `None` (treated
 as "no usable cache"), never a partially-written one.
 
+## Embedding reuse
+
+`turbovec` and `hybrid` rebuilds do not re-embed unchanged chunks. Each chunk
+is keyed by `(model_name, sha256(chunk text))`; before a rebuild overwrites
+the cache, the previous `turbovec.json` (else `hybrid.json`'s dense arm) is
+read as a seed and the vectors of every chunk whose key matches are copied
+byte-for-byte. Only new or changed chunk texts are encoded (duplicates once);
+if nothing changed, the embedding model is not even loaded until a query
+needs it. `bit_width` does not affect reuse (stored vectors are
+pre-quantization); a different `model_name` means no reuse. A seed that is
+missing, corrupt or at an older schema is ignored and everything is encoded.
+
 ## Freshness check (fast path)
 
 The "is this cache up to date?" check used by `index` reads only the meta file
 and the first 4 KB of the data file (`cache_is_loadable`), never the full
-cache. The head must begin with `{"schema": <current SCHEMA_VERSION>`, the
+cache. The head must begin with `{"schema": <a loadable schema version>`, the
 strategy's optional modules must be importable, and for `pi-serini` the
 referenced Lucene directory must exist. A corrupt body past that head is not
 detected here; `query` still performs a full `load_index` and rebuilds on
@@ -231,6 +245,15 @@ other unrecognized-schema cache: `from_dict` raises `ValueError`,
 `load_index` returns `None`, and the caller (`_build_and_save` via
 `_load_or_rebuild`/`_up_to_date_message`) transparently rebuilds a fresh v2
 cache — no manual cache-clearing step is required after upgrading.
+
+**v2 -> v3 (turbovec) / v3 -> v4 (hybrid)**: the dense arm now stores vectors
+as base64 little-endian float32 (`{"encoding", "dtype", "shape", "data"}`)
+plus `text_sha256` instead of a JSON list of float lists, which loads
+without building Python lists. Existing turbovec v2 and hybrid v3 caches
+still **load and serve queries** (no rebuild if the fingerprint is fresh) but
+carry no hashes, so they give no embedding reuse: the next rebuild
+re-embeds everything once and writes the new schema. A 0.13.0 engine
+reading the new schema treats it as unrecognized and rebuilds.
 
 ## Next steps
 

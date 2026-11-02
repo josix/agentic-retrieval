@@ -48,7 +48,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from retrieval import extractors
 from retrieval.chunker import ChunkingPolicy
@@ -353,7 +353,7 @@ def cache_is_loadable(root: "os.PathLike[str] | str", retriever_name: str = "lex
     parses the (potentially multi-GB) data file.
 
     Probes only the first few KB of the data file: it must exist and begin
-    with ``{"schema": <current SCHEMA_VERSION>`` (every ``to_dict`` emits
+    with ``{"schema": <a loadable schema version>`` (every ``to_dict`` emits
     ``schema`` first; writes are atomic so a valid head implies a complete
     file), the retriever's optional modules must be importable, and for
     ``pi-serini`` the referenced Lucene directory must exist. A corrupt body
@@ -367,13 +367,71 @@ def cache_is_loadable(root: "os.PathLike[str] | str", retriever_name: str = "lex
     except OSError:
         return False
     match = _SCHEMA_HEAD_RE.match(head)
-    if match is None or int(match.group(1)) != retriever_cls.SCHEMA_VERSION:
+    loadable = getattr(retriever_cls, "LOADABLE_SCHEMAS", frozenset({retriever_cls.SCHEMA_VERSION}))
+    if match is None or int(match.group(1)) not in loadable:
         return False
     if not _modules_available(tuple(getattr(retriever_cls, "REQUIRED_MODULES", ()))):
         return False
     if retriever_name == "pi-serini":
         return _lucene_dir_exists(head)
     return True
+
+
+def _head_schema(path: Path) -> Optional[int]:
+    """Schema number from the first bytes of *path*, or ``None``."""
+    try:
+        with open(path, "rb") as handle:
+            match = _SCHEMA_HEAD_RE.match(handle.read(_HEAD_BYTES))
+    except OSError:
+        return None
+    return int(match.group(1)) if match else None
+
+
+def _seed_from_file(path: Path, schema: int, key: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse *path* (only if its head schema is *schema*) and return the dense
+    payload (nested under *key* when given) if it carries ``text_sha256``."""
+    if _head_schema(path) != schema:
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    dense = data.get(key) if key else data
+    if isinstance(dense, dict) and dense.get("text_sha256"):
+        return dense
+    return None
+
+
+def iter_embedding_seeds(
+    root: "os.PathLike[str] | str", prefer: str = "turbovec"
+) -> Iterator[Dict[str, Any]]:
+    """Lazily yield prior dense-arm payloads usable to reuse embeddings.
+
+    The *prefer*red retriever's cache (``"turbovec"`` or ``"hybrid"``) comes
+    first, the other follows, so a consumer can fall back when the first is
+    incompatible (e.g. another model) and a stale cache of one kind never
+    shadows a newer one of the other. Files not at the current schema (no
+    ``text_sha256``, e.g. v2) are skipped after a head probe so a huge legacy
+    cache is never fully parsed. Never raises.
+    """
+    directory = index_dir(root)
+    candidates = [
+        ("turbovec.json", TurbovecRetriever.SCHEMA_VERSION, None),
+        ("hybrid.json", HybridRetriever.SCHEMA_VERSION, "dense"),
+    ]
+    if prefer == "hybrid":
+        candidates.reverse()
+    for filename, schema, key in candidates:
+        try:
+            seed = _seed_from_file(directory / filename, schema, key)
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if seed is not None:
+            yield seed
+
+
+def load_embedding_seed(
+    root: "os.PathLike[str] | str", prefer: str = "turbovec"
+) -> Optional[Dict[str, Any]]:
+    """First payload from :func:`iter_embedding_seeds`, or ``None``."""
+    return next(iter_embedding_seeds(root, prefer), None)
 
 
 def fingerprint_memoized(

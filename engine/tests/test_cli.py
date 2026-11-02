@@ -25,7 +25,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from test_extractors import _PYPDF_INSTALLED, _write_pdf  # noqa: E402
 from test_record_loaders import register_fake_xyz  # noqa: E402
-from test_retrievers import _StubDense  # noqa: E402
+from test_retrievers import _NUMPY_INSTALLED, _FakeST, _FakeTQI, _StubDense  # noqa: E402
 
 from retrieval import cli, extractors  # noqa: E402
 from retrieval.cli import main  # noqa: E402
@@ -33,7 +33,7 @@ from retrieval.consolidation import ConsolidatedHit  # noqa: E402
 from retrieval.document import Document, SearchHit  # noqa: E402
 from retrieval.persistence import compute_fingerprint, index_dir, save_index  # noqa: E402
 from retrieval.project_loader import load_chunk_documents  # noqa: E402
-from retrieval.retrievers import LexicalRetriever  # noqa: E402
+from retrieval.retrievers import LexicalRetriever, TurbovecRetriever  # noqa: E402
 
 try:
     import turbovec  # noqa: F401
@@ -1657,6 +1657,73 @@ class TestIndexPerf(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(spy.call_count, 0)
         self.assertNotEqual(self._read("meta.json")["fingerprint"], old)
+
+
+class TestMakeRetrieverSeeding(unittest.TestCase):
+    def test_dense_retrievers_get_seed_provider_lexical_does_not(self) -> None:
+        root = pathlib.Path(".")
+        self.assertIsNotNone(cli._make_retriever(root, "turbovec")._seed_provider)
+        self.assertIsNotNone(cli._make_retriever(root, "hybrid")._dense._seed_provider)
+        self.assertFalse(hasattr(cli._make_retriever(root, "lexical"), "_seed_provider"))
+
+
+@unittest.skipUnless(_NUMPY_INSTALLED, "numpy not installed")
+class TestIncrementalTurbovecCli(unittest.TestCase):
+    def setUp(self) -> None:
+        self._project_tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._project_tmp.name)
+        _write(self.root / "a.txt", "routers forward packets between networks and carry data")
+        _write(self.root / "b.txt", "photosynthesis converts sunlight into chemical energy")
+        self._cache_tmp = tempfile.TemporaryDirectory()
+        self._old_env = os.environ.get("RETRIEVAL_INDEX_DIR")
+        os.environ["RETRIEVAL_INDEX_DIR"] = self._cache_tmp.name
+        _FakeST.encode_calls = []
+        for patcher in (
+            mock.patch.object(
+                TurbovecRetriever, "_require_backends", return_value=(_FakeST, _FakeTQI)
+            ),
+            mock.patch("retrieval.persistence._modules_available", return_value=True),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def tearDown(self) -> None:
+        if self._old_env is None:
+            os.environ.pop("RETRIEVAL_INDEX_DIR", None)
+        else:
+            os.environ["RETRIEVAL_INDEX_DIR"] = self._old_env
+        self._cache_tmp.cleanup()
+        self._project_tmp.cleanup()
+
+    def _index(self, *extra: str):
+        return _run(["index", "--root", str(self.root), "--retriever", "turbovec", *extra])
+
+    def test_rebuild_after_one_file_change_encodes_only_that_chunk(self) -> None:
+        self._index("--force")
+        self.assertEqual(sum(len(c) for c in _FakeST.encode_calls), 2)
+        _FakeST.encode_calls = []
+        _write(self.root / "a.txt", "completely different words about gardens")
+        _bump_mtime(self.root / "a.txt")
+        _code, out = self._index()
+        self.assertIn("indexed", out)
+        encoded = [t for call in _FakeST.encode_calls for t in call]
+        self.assertEqual(len(encoded), 1)
+        self.assertIn("gardens", encoded[0])
+
+    def test_v2_cache_serves_without_rebuild_or_encode(self) -> None:
+        self._index("--force")
+        path = index_dir(self.root) / "turbovec.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        vecs = TurbovecRetriever._decode_vectors(data["vectors"]).tolist()
+        v2 = {"schema": 2, "model_name": data["model_name"], "bit_width": data["bit_width"],
+              "docids": data["docids"], "units": data["units"], "vectors": vecs}
+        path.write_text(json.dumps(v2), encoding="utf-8")
+        _FakeST.encode_calls = []
+        _code, out = self._index()
+        self.assertIn("up to date", out)
+        retriever = cli._load_or_rebuild(self.root, "turbovec", False)
+        self.assertIsNone(retriever._text_hashes)
+        self.assertEqual(_FakeST.encode_calls, [])
 
 
 if __name__ == "__main__":

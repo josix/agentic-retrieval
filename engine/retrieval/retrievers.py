@@ -42,8 +42,21 @@ Optional backends follow the project's stub convention (see
 dependency raises a ``RuntimeError`` with opt-in instructions when used.
 """
 
+import base64
+import hashlib
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    Union,
+    runtime_checkable,
+)
 
 from retrieval.bm25 import BM25Index
 from retrieval.document import Document, SearchHit
@@ -273,12 +286,23 @@ class TreeSitterRetriever(LexicalRetriever):
         super().index(enriched)
 
 
+#: What a seed provider may return: one payload, ``None``, or a lazy iterable
+#: of candidate payloads tried in order until one is compatible.
+_SeedResult = Union[None, Dict[str, Any], Iterable[Dict[str, Any]]]
+
+
 class TurbovecRetriever:
     """Dense ANN comparison via TurboQuant quantization (turbovec).
 
     Embeds documents with a sentence-transformers model, indexes the vectors
     in a ``TurboQuantIndex``, and ranks by inner-product similarity.  The
     embedder is intentionally pluggable; the default is a small, fast model.
+
+    Embeddings are reused across rebuilds: each chunk is keyed by
+    ``(model_name, sha256(chunk text))``, and when a seed (the previous
+    cache, see ``set_embedding_seed``) holds that key its vector is copied
+    byte-for-byte instead of re-encoded. Only unseen texts are encoded, and
+    duplicate texts are encoded once.
     """
 
     name = "turbovec (dense ann)"
@@ -289,8 +313,14 @@ class TurbovecRetriever:
 
     #: Bump when the persisted dict shape changes incompatibly (see
     #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
-    #: metadata).
-    SCHEMA_VERSION = 2
+    #: metadata). v3 stores vectors as base64 little-endian float32 plus a
+    #: per-chunk ``text_sha256`` list enabling embedding reuse.
+    SCHEMA_VERSION = 3
+
+    #: Schemas ``from_dict`` accepts. v2 (JSON float lists, no hashes) still
+    #: loads and serves queries, but gives no embedding reuse; the next
+    #: rebuild writes v3.
+    LOADABLE_SCHEMAS = frozenset({2, 3})
 
     #: See ``LexicalRetriever.REQUIRED_MODULES``.
     REQUIRED_MODULES: tuple = ("sentence_transformers", "turbovec", "numpy")
@@ -303,7 +333,11 @@ class TurbovecRetriever:
         self._units: List[Dict[str, Any]] = []
         self._index = None
         self._embedder = None
-        self._vectors: Optional[List[List[float]]] = None
+        #: float32 ``(n, dim)`` ndarray (pre-quantization), never a list.
+        self._vectors: Optional[Any] = None
+        self._text_hashes: Optional[List[str]] = None
+        self._seed_provider: Optional[Callable[[], _SeedResult]] = None
+        self._reuse_stats: Dict[str, int] = {}
 
     @property
     def doc_count(self) -> int:
@@ -321,6 +355,158 @@ class TurbovecRetriever:
             ) from exc
         return SentenceTransformer, TurboQuantIndex
 
+    # -- vector (de)serialization -------------------------------------------
+
+    @staticmethod
+    def _text_hash(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _encode_vectors(arr: Any) -> Dict[str, Any]:
+        """float32 ``(n, dim)`` ndarray -> JSON-safe base64 little-endian dict."""
+        import numpy as np  # provided by the turbovec/local extras
+
+        arr = np.ascontiguousarray(arr, dtype="<f4")
+        return {
+            "encoding": "base64",
+            "dtype": "<f4",
+            "shape": [int(arr.shape[0]), int(arr.shape[1])],
+            "data": base64.b64encode(arr.tobytes()).decode("ascii"),
+        }
+
+    @staticmethod
+    def _decode_vectors(payload: Any) -> Any:
+        """Decode a v3 base64 dict (or a v2 nested float list) into an owned,
+        writable, C-contiguous float32 ``(n, dim)`` ndarray. Raises
+        ``ValueError`` on any malformed payload."""
+        import numpy as np  # provided by the turbovec/local extras
+
+        if isinstance(payload, dict):
+            if payload.get("encoding") != "base64" or payload.get("dtype") != "<f4":
+                raise ValueError("unsupported turbovec vector encoding")
+            shape = payload.get("shape")
+            if (
+                not isinstance(shape, list)
+                or len(shape) != 2
+                or not all(isinstance(x, int) and x >= 0 for x in shape)
+            ):
+                raise ValueError("malformed turbovec vector shape")
+            encoded = payload.get("data")
+            if not isinstance(encoded, str):
+                raise ValueError("turbovec vector data must be a base64 string")
+            raw = base64.b64decode(encoded, validate=True)
+            if len(raw) != shape[0] * shape[1] * 4:
+                raise ValueError("turbovec vector byte length does not match shape")
+            return np.frombuffer(raw, dtype="<f4").reshape(shape).astype(np.float32, copy=True)
+        arr = np.ascontiguousarray(np.asarray(payload, dtype=np.float32))
+        if arr.ndim != 2:
+            raise ValueError("turbovec vectors must be 2-dimensional")
+        return arr
+
+    def set_embedding_seed(
+        self, provider: Optional[Callable[[], _SeedResult]]
+    ) -> None:
+        """Register a zero-arg callable returning a prior ``to_dict`` payload
+        (or ``None``). It is invoked lazily, only inside ``index()``, so the
+        previous cache is read before it is overwritten."""
+        self._seed_provider = provider
+
+    def _decode_one_seed(self, data: Any) -> Optional[Dict[str, Any]]:
+        """Decode one candidate payload, or ``None`` if unusable here."""
+        if not isinstance(data, dict) or data.get("model_name") != self._model_name:
+            return None
+        hashes = data.get("text_sha256")
+        if not hashes:
+            return None
+        vectors = self._decode_vectors(data["vectors"])
+        if vectors.shape[0] != len(hashes):
+            return None
+        rows: Dict[str, int] = {}
+        for row, h in enumerate(hashes):
+            rows.setdefault(h, row)
+        return {"rows": rows, "vectors": vectors}
+
+    def _decode_seed(self) -> Optional[Dict[str, Any]]:
+        """``{"rows": {hash: row}, "vectors": ndarray}`` from the first
+        compatible seed candidate, or ``None``. Never raises."""
+        if self._seed_provider is None:
+            return None
+        try:
+            result = self._seed_provider()
+            candidates = [result] if isinstance(result, dict) or result is None else result
+            for data in candidates:
+                try:
+                    seed = self._decode_one_seed(data)
+                except Exception:  # a bad candidate: try the next one
+                    continue
+                if seed is not None:
+                    return seed
+        except Exception:  # a bad seed must never fail a build
+            pass
+        return None
+
+    def _encode(self, texts: List[str]) -> Any:
+        import numpy as np  # provided by the turbovec/local extras
+
+        return np.ascontiguousarray(
+            self._embedder.encode(texts, normalize_embeddings=True, show_progress_bar=False),
+            dtype=np.float32,
+        )
+
+    @staticmethod
+    def _partition_by_seed(
+        documents: List[Document], hashes: List[str], seed_rows: Dict[str, int]
+    ) -> Tuple[List[int], List[int], List[int], List[int], List[str]]:
+        """Split into seed hits and misses (misses de-duplicated by hash).
+
+        Returns ``hit_pos, hit_rows, miss_pos, miss_uidx, miss_texts``.
+        """
+        hit_pos: List[int] = []
+        hit_rows: List[int] = []
+        miss_pos: List[int] = []
+        miss_uidx: List[int] = []
+        miss_texts: List[str] = []
+        unique_of: Dict[str, int] = {}
+        for pos, (doc, h) in enumerate(zip(documents, hashes)):
+            row = seed_rows.get(h)
+            if row is not None:
+                hit_pos.append(pos)
+                hit_rows.append(row)
+                continue
+            u = unique_of.get(h)
+            if u is None:
+                u = unique_of[h] = len(miss_texts)
+                miss_texts.append(doc.text)
+            miss_pos.append(pos)
+            miss_uidx.append(u)
+        return hit_pos, hit_rows, miss_pos, miss_uidx, miss_texts
+
+    def _encode_all(
+        self, documents: List[Document], hashes: List[str]
+    ) -> Tuple[Any, List[int], List[str]]:
+        """Fallback (seed unusable): encode every unique text once.
+
+        Returns ``enc, miss_uidx, miss_texts``.
+        """
+        miss_uidx: List[int] = []
+        miss_texts: List[str] = []
+        first: Dict[str, int] = {}
+        for h, doc in zip(hashes, documents):
+            if h not in first:
+                first[h] = len(miss_texts)
+                miss_texts.append(doc.text)
+            miss_uidx.append(first[h])
+        return self._encode(miss_texts), miss_uidx, miss_texts
+
+    def _index_empty(self, SentenceTransformer: Any, TurboQuantIndex: Any) -> None:
+        self._embedder = SentenceTransformer(self._model_name)
+        vectors = self._encode([])
+        self._vectors = vectors
+        self._text_hashes = []
+        self._reuse_stats = {"reused": 0, "encoded": 0}
+        self._index = TurboQuantIndex(dim=vectors.shape[1], bit_width=self._bit_width)
+        self._index.add(vectors)
+
     def index(self, documents: List[Document]) -> None:
         # Check for the optional extras (raises a guidance RuntimeError if
         # missing) before importing numpy, so a missing 'dense' tier always
@@ -330,18 +516,38 @@ class TurbovecRetriever:
 
         self._units = _units_from_documents(documents)
         self._docids = [u["docid"] for u in self._units]
-        self._embedder = SentenceTransformer(self._model_name)
-        vectors = np.ascontiguousarray(
-            self._embedder.encode(
-                [d.text for d in documents],
-                normalize_embeddings=True,
-                show_progress_bar=False,
-            ),
-            dtype=np.float32,
+        if not documents:
+            self._index_empty(SentenceTransformer, TurboQuantIndex)
+            return
+
+        hashes = [self._text_hash(d.text) for d in documents]
+        seed = self._decode_seed()
+        hit_pos, hit_rows, miss_pos, miss_uidx, miss_texts = self._partition_by_seed(
+            documents, hashes, seed["rows"] if seed else {}
         )
-        self._vectors = vectors.tolist()
-        self._index = TurboQuantIndex(dim=vectors.shape[1], bit_width=self._bit_width)
-        self._index.add(vectors)
+
+        enc = None
+        if miss_texts:
+            self._embedder = SentenceTransformer(self._model_name)
+            enc = self._encode(miss_texts)
+        if seed is not None and enc is not None and enc.shape[1] != seed["vectors"].shape[1]:
+            # Dimension drift: the seed is unusable; encode everything.
+            seed, hit_pos, hit_rows = None, [], []
+            miss_pos = list(range(len(documents)))
+            enc, miss_uidx, miss_texts = self._encode_all(documents, hashes)
+        dim = enc.shape[1] if enc is not None else seed["vectors"].shape[1]
+
+        out = np.empty((len(documents), dim), dtype=np.float32)
+        if hit_pos:
+            out[hit_pos] = seed["vectors"][hit_rows]
+        if miss_pos:
+            out[miss_pos] = enc[miss_uidx]
+
+        self._vectors = out
+        self._text_hashes = hashes
+        self._reuse_stats = {"reused": len(hit_pos), "encoded": len(miss_texts)}
+        self._index = TurboQuantIndex(dim=dim, bit_width=self._bit_width)
+        self._index.add(out)
 
     def _ensure_embedder(self):
         # A from_dict-restored retriever has an index but no embedder yet;
@@ -372,42 +578,53 @@ class TurbovecRetriever:
         return [h.docid for h in self.search_detailed(query, top_k)]
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to a JSON-safe dict (docids + raw embedding vectors).
+        """Serialize to a JSON-safe dict (docids + base64 float32 vectors).
 
         The quantized ``TurboQuantIndex`` itself is not serializable, so the
         pre-quantization vectors are stored and the index is rebuilt from
-        them in ``from_dict``.
+        them in ``from_dict``. ``schema`` stays the first key (the cheap
+        head probe in ``retrieval.persistence`` relies on it).
         """
         if self._index is None or self._vectors is None:
             raise RuntimeError("call index() before to_dict()")
-        return {
+        data: Dict[str, Any] = {
             "schema": self.SCHEMA_VERSION,
             "model_name": self._model_name,
             "bit_width": self._bit_width,
             "docids": self._docids,
             "units": self._units,
-            "vectors": self._vectors,
         }
+        if self._text_hashes is not None:
+            data["text_sha256"] = self._text_hashes
+        data["vectors"] = self._encode_vectors(self._vectors)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TurbovecRetriever":
         """Rebuild from ``to_dict`` output; needs the same extras as ``index``.
 
-        Raises ``ValueError`` on an unrecognized schema version and
-        ``RuntimeError`` (with opt-in guidance) when the optional backends
-        are missing.
+        Accepts schema 3 and the legacy schema 2 (float lists; no hashes, so
+        no embedding reuse until the next rebuild). Raises ``ValueError`` on
+        an unrecognized schema or malformed vectors and ``RuntimeError``
+        (with opt-in guidance) when the optional backends are missing.
         """
         schema = data.get("schema")
-        if schema != cls.SCHEMA_VERSION:
+        if schema not in cls.LOADABLE_SCHEMAS:
             raise ValueError(f"unsupported TurbovecRetriever schema {schema!r}")
         retriever = cls(model_name=data["model_name"], bit_width=data["bit_width"])
         _SentenceTransformer, TurboQuantIndex = retriever._require_backends()
-        import numpy as np  # provided by the turbovec/local extras
 
-        vectors = np.ascontiguousarray(np.asarray(data["vectors"], dtype=np.float32))
-        retriever._docids = data["docids"]
+        vectors = cls._decode_vectors(data["vectors"])
+        docids = data["docids"]
+        if vectors.shape[0] != len(docids):
+            raise ValueError("turbovec vector rows do not match docids")
+        hashes = data.get("text_sha256") if schema >= 3 else None
+        if hashes is not None and len(hashes) != len(docids):
+            raise ValueError("turbovec text_sha256 length does not match docids")
+        retriever._docids = docids
         retriever._units = data["units"]
-        retriever._vectors = data["vectors"]
+        retriever._vectors = vectors
+        retriever._text_hashes = hashes
         retriever._index = TurboQuantIndex(dim=vectors.shape[1], bit_width=retriever._bit_width)
         retriever._index.add(vectors)
         return retriever
@@ -585,7 +802,11 @@ class HybridRetriever:
     #: Bump when the persisted dict shape changes incompatibly (see
     #: ``LexicalRetriever.SCHEMA_VERSION``). v2 adds ``units`` (chunk span
     #: metadata). v3 tracks the lexical arm's own v3 bump (tokenizer mode).
-    SCHEMA_VERSION = 3
+    #: v4 nests the dense arm's v3 payload (base64 vectors + text hashes).
+    SCHEMA_VERSION = 4
+
+    #: Schemas ``from_dict`` accepts; v3 nests a dense v2 arm, which still loads.
+    LOADABLE_SCHEMAS = frozenset({3, 4})
 
     #: See ``LexicalRetriever.REQUIRED_MODULES``.
     REQUIRED_MODULES: tuple = ("sentence_transformers", "turbovec", "numpy")
@@ -605,6 +826,14 @@ class HybridRetriever:
     def doc_count(self) -> int:
         """Number of indexed chunks (== ``len(to_dict()["docids"])``)."""
         return len(self._lexical._docids)
+
+    def set_embedding_seed(
+        self, provider: Optional[Callable[[], _SeedResult]]
+    ) -> None:
+        """Forward the embedding-reuse seed to the dense arm (if it has one)."""
+        setter = getattr(self._dense, "set_embedding_seed", None)
+        if setter is not None:
+            setter(provider)
 
     def arms_compatible(
         self,
@@ -718,7 +947,7 @@ class HybridRetriever:
         ``RuntimeError`` when the dense arm's extras are missing.
         """
         schema = data.get("schema")
-        if schema != cls.SCHEMA_VERSION:
+        if schema not in cls.LOADABLE_SCHEMAS:
             raise ValueError(f"unsupported HybridRetriever schema {schema!r}")
         retriever = cls()
         retriever._lexical = LexicalRetriever.from_dict(data["lexical"])
